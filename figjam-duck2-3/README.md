@@ -1,5 +1,7 @@
 # Duck Check-In
 
+> Older iteration, kept for reference. `../figjam-duck2-4` is the current version and the one to import.
+
 FigJam plugin. A small yellow duck sits in the corner. If 3 minutes pass with no new stickies or shapes, it checks in: asks how you're feeling first, then talks it through with you, using what's actually on the board.
 
 ## Live chat vs fallback
