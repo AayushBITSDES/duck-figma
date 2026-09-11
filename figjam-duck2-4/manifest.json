@@ -1,0 +1,12 @@
+{
+  "name": "Duck Check-In",
+  "id": "figjam-duck-checkin",
+  "api": "1.0.0",
+  "main": "dist/code.js",
+  "ui": "dist/ui.html",
+  "editorType": ["figjam"],
+  "networkAccess": {
+    "allowedDomains": ["https://api.anthropic.com"],
+    "reasoning": "Calls the Anthropic API so the duck can hold a live conversation, using the user's own API key."
+  }
+}
