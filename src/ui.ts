@@ -2,6 +2,10 @@ type Mood = 'stuck' | 'frustrated' | 'thinking' | 'fine';
 type ChatMsg = { role: 'user' | 'assistant'; content: string; error?: boolean };
 type Mode = 'idle' | 'settings' | 'checkin' | 'chat';
 
+// gpt-5.4-nano is ~4x cheaper if the duck starts costing real money.
+const MODEL = 'gpt-5.4-mini';
+const MAX_REPLY_TOKENS = 220;
+
 const root = document.getElementById('root')!;
 let mode: Mode = 'idle';
 let apiKey: string | null = null;
@@ -113,14 +117,14 @@ function showSettings() {
   mode = 'settings';
   render(
     '<div class="panel">' +
-    '<div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">' + duckSvg(28) + '<p class="msg" style="margin:0;">Add your Anthropic API key so I can actually talk back.</p></div>' +
-    '<input id="key-input" type="password" placeholder="sk-ant-..." value="' + escapeAttr(apiKey || '') + '" style="width:100%; box-sizing:border-box; padding:6px; border-radius:8px; border:1px solid #ddd; font-size:12px; margin-bottom:8px;" />' +
+    '<div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">' + duckSvg(28) + '<p class="msg" style="margin:0;">Add your OpenAI API key so I can actually talk back.</p></div>' +
+    '<input id="key-input" type="password" placeholder="sk-..." value="' + escapeAttr(apiKey || '') + '" style="width:100%; box-sizing:border-box; padding:6px; border-radius:8px; border:1px solid #ddd; font-size:12px; margin-bottom:8px;" />' +
     '<div class="actions">' +
     '<button id="save-key">Save</button>' +
     (apiKey ? '<button id="clear-key">Remove key</button>' : '') +
     '<button id="back">Back</button>' +
     '</div>' +
-    '<p style="font-size:10px; color:#999; margin-top:8px;">Stored locally on this device. Board text and your messages get sent to api.anthropic.com when you chat. Without a key I still read the board, but my replies are canned templates, not a conversation.</p>' +
+    '<p style="font-size:10px; color:#999; margin-top:8px;">Stored locally on this device. Board text and your messages get sent to api.openai.com when you chat. Without a key I still read the board, but my replies are canned templates, not a conversation.</p>' +
     '</div>'
   );
   document.getElementById('save-key')!.onclick = () => {
@@ -194,26 +198,18 @@ async function sendUserText(userText: string, first = false) {
   renderChat();
 }
 
-// Error bubbles stay out of the history sent to the API, and consecutive
-// same-role turns get merged so a failed turn can't break role alternation.
+// Error bubbles are shown to the user but never sent back as model context.
 function apiMessages() {
-  const out: ChatMsg[] = [];
-  for (const m of messages) {
-    if (m.error) continue;
-    const last = out[out.length - 1];
-    if (last && last.role === m.role) last.content += '\n\n' + m.content;
-    else out.push({ role: m.role, content: m.content });
-  }
-  return out.map((m) => ({ role: m.role, content: m.content }));
+  return messages.filter((m) => !m.error).map((m) => ({ role: m.role, content: m.content }));
 }
 
 function apiErrorMessage(status: number, detail: string): string {
   const tail = detail ? ' (' + detail + ')' : '';
-  if (status === 401) return "Anthropic rejected that key. Check it in settings" + tail + '.';
+  if (status === 401) return 'OpenAI rejected that key. Check it in settings' + tail + '.';
   if (status === 403) return "That key isn't allowed to use this model" + tail + '.';
-  if (status === 404) return 'That model name came back unknown' + tail + '.';
+  if (status === 404) return 'OpenAI does not know the model ' + MODEL + tail + '.';
   if (status === 429) return 'Rate limited, or the account is out of credit. Give it a minute' + tail + '.';
-  if (status >= 500) return "Anthropic's server errored (" + status + '). Try again in a moment.';
+  if (status >= 500) return "OpenAI's server errored (" + status + '). Try again in a moment.';
   return 'The API refused that request (' + status + ')' + tail + '.';
 }
 
@@ -222,21 +218,28 @@ async function askDuck() {
     const boardNote = boardItems.length
       ? '\n\nHere is a snapshot of text currently on the board, in no particular order:\n- ' + boardItems.join('\n- ')
       : '\n\nThe board looks empty right now, or has nothing with text on it.';
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': apiKey || '',
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true',
+        Authorization: 'Bearer ' + (apiKey || ''),
       },
       body: JSON.stringify({
-        model: 'claude-haiku-4-5',
-        max_tokens: 220,
-        system:
-          "You are a small yellow rubber duck sitting on a FigJam board, keeping a designer company while they work. Warm, plain, brief, 2 to 4 sentences. Check in on how they are doing before problem solving. Ask one question at a time. Reference specific things from the board snapshot when it helps, otherwise ignore it. Never lecture, never sound like a corporate assistant." +
-          boardNote,
-        messages: apiMessages(),
+        model: MODEL,
+        max_completion_tokens: MAX_REPLY_TOKENS,
+        // The duck should answer, not deliberate. Reasoning tokens would come
+        // out of the same budget as the visible reply.
+        reasoning_effort: 'none',
+        verbosity: 'low',
+        messages: [
+          {
+            role: 'developer',
+            content:
+              "You are a small yellow rubber duck sitting on a FigJam board, keeping a designer company while they work. Warm, plain, brief, 2 to 4 sentences. Check in on how they are doing before problem solving. Ask one question at a time. Reference specific things from the board snapshot when it helps, otherwise ignore it. Never lecture, never sound like a corporate assistant." +
+              boardNote,
+          },
+          ...apiMessages(),
+        ],
       }),
     });
     const data = await res.json().catch(() => null);
@@ -245,16 +248,23 @@ async function askDuck() {
       messages.push({ role: 'assistant', content: apiErrorMessage(res.status, detail), error: true });
       return;
     }
-    const text = data && data.content && data.content[0] && data.content[0].text;
+    const choice = data && data.choices && data.choices[0];
+    const text = choice && choice.message && choice.message.content;
     if (!text) {
-      messages.push({ role: 'assistant', content: 'The API answered, but with nothing in it. Try again?', error: true });
+      const why =
+        choice && choice.finish_reason === 'content_filter'
+          ? 'That one got caught by the content filter.'
+          : choice && choice.finish_reason === 'length'
+          ? 'That reply hit the length cap before any of it came out.'
+          : 'The API answered, but with nothing in it. Try again?';
+      messages.push({ role: 'assistant', content: why, error: true });
       return;
     }
     messages.push({ role: 'assistant', content: text });
   } catch (e) {
     messages.push({
       role: 'assistant',
-      content: "Couldn't reach api.anthropic.com. Check your connection, then try again.",
+      content: "Couldn't reach api.openai.com. Check your connection, then try again.",
       error: true,
     });
   }

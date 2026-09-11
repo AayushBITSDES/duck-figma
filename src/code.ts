@@ -77,9 +77,15 @@ setInterval(() => {
   }
 }, CHECK_INTERVAL_MS);
 
-figma.clientStorage.getAsync('anthropicApiKey').then((key) => {
+const KEY_STORE = 'openaiApiKey';
+
+figma.clientStorage.getAsync(KEY_STORE).then((key) => {
   figma.ui.postMessage({ type: 'api-key', key: key || null });
 });
+
+// This plugin used to store an Anthropic key. Don't leave a stale secret sitting
+// in clientStorage on machines that ran the old build.
+figma.clientStorage.deleteAsync('anthropicApiKey');
 
 // Give the UI a board snapshot up front so the first reply is never board-blind.
 sendBoard();
@@ -99,13 +105,13 @@ figma.ui.onmessage = (msg) => {
   }
 
   if (msg.type === 'save-key') {
-    figma.clientStorage.setAsync('anthropicApiKey', msg.key).then(() => {
+    figma.clientStorage.setAsync(KEY_STORE, msg.key).then(() => {
       figma.ui.postMessage({ type: 'api-key', key: msg.key });
     });
   }
 
   if (msg.type === 'clear-key') {
-    figma.clientStorage.deleteAsync('anthropicApiKey').then(() => {
+    figma.clientStorage.deleteAsync(KEY_STORE).then(() => {
       figma.ui.postMessage({ type: 'api-key', key: null });
     });
   }
