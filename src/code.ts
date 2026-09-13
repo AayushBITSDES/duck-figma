@@ -118,11 +118,15 @@ setInterval(() => {
 async function loadSettings() {
   const settings = { provider: 'openrouter', key: '' };
   try {
-    const stored = (await figma.clientStorage.getAsync(STORE)) || {};
-    if (stored.provider) settings.provider = stored.provider;
-    // `keys` is the per-provider shape an earlier build on this branch used.
-    settings.key = stored.key || (stored.keys && stored.keys[settings.provider]) || '';
-    if (!settings.key) {
+    const stored = await figma.clientStorage.getAsync(STORE);
+    if (stored) {
+      // Settings exist, so they are the truth, including a key the user
+      // deliberately cleared. Never second-guess that with an older value.
+      if (stored.provider) settings.provider = stored.provider;
+      // `keys` is the per-provider shape an earlier build on this branch used.
+      settings.key = stored.key || (stored.keys && stored.keys[settings.provider]) || '';
+    } else {
+      // Nothing saved yet: adopt a key an older build left behind.
       for (const entry of LEGACY_KEYS) {
         const legacy = await figma.clientStorage.getAsync(entry[0]);
         if (typeof legacy === 'string' && legacy.trim()) {
@@ -131,13 +135,11 @@ async function loadSettings() {
           break;
         }
       }
-      if (settings.key) {
-        await figma.clientStorage.setAsync(STORE, settings);
-        // Migrated, so don't leave the old secrets lying around. Re-running
-        // this is harmless, so failing here costs nothing.
-        for (const entry of LEGACY_KEYS) await figma.clientStorage.deleteAsync(entry[0]);
-      }
+      if (settings.key) await figma.clientStorage.setAsync(STORE, settings);
     }
+    // Either way the old names are no longer read, so don't leave the secrets
+    // sitting there. Failing here is harmless; nothing depends on them now.
+    for (const entry of LEGACY_KEYS) await figma.clientStorage.deleteAsync(entry[0]);
   } catch (e) {
     // Fall through with the defaults; the UI just shows an empty key field.
   }

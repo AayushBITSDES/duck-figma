@@ -298,6 +298,14 @@ async function runCodeTests() {
   check('the older per-provider shape is read through',
     boot.settings().settings, { provider: 'openai', key: 'sk-o' });
 
+  // A key the user deliberately cleared must stay cleared, even if a legacy
+  // entry survived an earlier failed cleanup.
+  boot = bootPlugin({ duckSettings: { provider: 'google', key: '' }, anthropicApiKey: 'sk-ant-old' });
+  await settled();
+  check('an explicitly cleared key is not resurrected from a legacy entry',
+    boot.settings().settings, { provider: 'google', key: '' });
+  check('and the stale legacy entry is cleaned up', 'anthropicApiKey' in boot.state, false);
+
   // Saving writes the whole of the settings, so there is nothing to merge.
   boot = bootPlugin({ duckSettings: { provider: 'openrouter', key: 'old' } });
   await settled();
