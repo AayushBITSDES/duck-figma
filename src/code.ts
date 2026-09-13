@@ -116,6 +116,16 @@ setInterval(() => {
 }, TICK_MS);
 
 async function loadSettings() {
+  try {
+    await readAndMigrateSettings();
+  } catch (e) {
+    // The UI blocks its settings screen until this message lands, so it has to
+    // be sent even when storage misbehaves.
+    figma.ui.postMessage({ type: 'settings', settings: { provider: 'openrouter', keys: {} } });
+  }
+}
+
+async function readAndMigrateSettings() {
   const stored = (await figma.clientStorage.getAsync(STORE)) || {};
   const keys: { [k: string]: string } = Object.assign({}, stored.keys || {});
   let sawLegacy = false;

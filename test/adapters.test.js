@@ -72,7 +72,16 @@ global.fetch = async (url, opts) => {
 };
 
 const uiSrc = fs.readFileSync(path.join(BUILD, 'ui.js'), 'utf8');
-const ui = new Function(uiSrc + `; return {
+
+// Each call boots a fresh copy of the compiled UI with its own module state, so
+// startup-ordering cases can be tested without leaking into the others.
+function makeUi() {
+  const api = newUiInstance();
+  api.deliver = (pluginMessage) => window.onmessage({ data: { pluginMessage: pluginMessage } });
+  return api;
+}
+
+function newUiInstance() { return new Function(uiSrc + `; return {
   get messages(){return messages}, set messages(v){messages=v},
   set boardItems(v){boardItems=v},
   get provider(){return provider}, set provider(v){provider=v},
@@ -80,12 +89,16 @@ const ui = new Function(uiSrc + `; return {
   get draftProvider(){return draftProvider},
   set fallbackTurn(v){fallbackTurn=v}, set fallbackItemCursor(v){fallbackItemCursor=v},
   PROVIDERS, activeKey, askDuck, apiMessages, apiErrorMessage, emptyReason,
-  fallbackReply, openSettings, idleDuck };`)();
+  fallbackReply, openSettings, idleDuck };`)(); }
+
+const ui = makeUi();
 
 const ok = (payload) => ({ ok: true, status: 200, json: async () => payload });
 
 async function run() {
-  window.onmessage({ data: { pluginMessage: { type: 'board-context', board: ['nav | search', 'onboarding copy'] } } });
+  // Real startup order: code.ts sends the saved settings, then the board.
+  ui.deliver({ type: 'settings', settings: { provider: 'openrouter', keys: {} } });
+  ui.deliver({ type: 'board-context', board: ['nav | search', 'onboarding copy'] });
   const convo = [{ role: 'user', content: 'I am stuck.' }];
   let b;
 
@@ -207,6 +220,34 @@ async function run() {
     [ui.keys.google, ui.keys.openrouter, ui.keys.anthropic], ['AIza-new', 'sk-or-keep', 'sk-ant-keep']);
   check('Save persists through one save-settings message',
     posted.filter((m) => m.type === 'save-settings').length, 1);
+
+  // --- Settings opened before startup finishes ------------------------------
+  // code.ts needs several storage round-trips before it can send the saved
+  // settings. Seeding a draft from the empty pre-load state and then saving it
+  // would persist that emptiness over every provider's key.
+  const early = makeUi();
+  early.openSettings();
+  const earlyHtml = el('root').innerHTML;
+  check('settings opened before load shows a wait state, with nothing to Save',
+    [earlyHtml.indexOf('Loading') > -1, earlyHtml.indexOf('id="save"') > -1], [true, false]);
+
+  early.deliver({ type: 'settings', settings: { provider: 'anthropic', keys: { openrouter: 'sk-or-saved', anthropic: 'sk-ant-saved' } } });
+  check('the screen re-seeds itself once settings arrive', el('provider').value, 'anthropic');
+
+  el('key-input').value = 'sk-ant-edited';
+  posted.length = 0;
+  el('save').onclick();
+  check('saving after a late load keeps the other provider keys',
+    [early.keys.anthropic, early.keys.openrouter], ['sk-ant-edited', 'sk-or-saved']);
+  check('and persists both',
+    posted.filter((m) => m.type === 'save-settings').pop().settings.keys,
+    { openrouter: 'sk-or-saved', anthropic: 'sk-ant-edited' });
+
+  // Storage failure still has to unblock the screen.
+  const broken = makeUi();
+  broken.openSettings();
+  broken.deliver({ type: 'settings', settings: null });
+  check('a settings message with no payload still unblocks the screen', typeof el('save').onclick, 'function');
 
   await runCodeTests();
 

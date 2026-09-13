@@ -105,6 +105,10 @@ let boardReadAt = 0;
 // silently pointing the next conversation at a provider that was never saved.
 let draftProvider: ProviderId = 'openrouter';
 let draftKeys: { [k: string]: string } = {};
+// code.ts reads storage over several async round-trips before it can send the
+// saved settings. Until that lands, seeding a draft would snapshot an empty key
+// map, and saving it would wipe every other provider's key.
+let settingsLoaded = false;
 
 function activeKey(): string {
   const stored = (keys[provider] || '').trim();
@@ -222,6 +226,15 @@ function idleDuck() {
 }
 
 function openSettings() {
+  if (!settingsLoaded) {
+    mode = 'settings';
+    render(
+      '<div class="screen">' + header('settings') +
+      '<div class="body"><div class="muted">Loading your saved settings...</div></div>' +
+      '</div>'
+    );
+    return;
+  }
   draftProvider = provider;
   draftKeys = Object.assign({}, keys);
   showSettings();
@@ -517,9 +530,13 @@ window.onmessage = (event) => {
   }
   // Back to work: stand down only if the duck is still just asking.
   if (msg.type === 'resume' && mode === 'checkin') idleDuck();
-  if (msg.type === 'settings' && msg.settings) {
-    if (PROVIDERS[msg.settings.provider as ProviderId]) provider = msg.settings.provider;
-    keys = msg.settings.keys || {};
+  if (msg.type === 'settings') {
+    const settings = msg.settings || {};
+    if (PROVIDERS[settings.provider as ProviderId]) provider = settings.provider;
+    keys = settings.keys || {};
+    settingsLoaded = true;
+    // Re-seed a settings screen that was opened before this arrived.
+    if (mode === 'settings') openSettings();
   }
 };
 
