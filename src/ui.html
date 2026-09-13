@@ -31,7 +31,8 @@
   .body { flex: 1 1 auto; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
   .ftr { flex: 0 0 auto; padding: 8px 12px 12px; display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--figma-color-border); }
   .row { display: flex; gap: 6px; }
-  .row > * { flex: 1; }
+  .row > * { flex: 1; min-width: 0; }
+  .ftr > button { width: 100%; }
   .muted { color: var(--figma-color-text-secondary); }
   .tiny { font-size: 10px; }
 

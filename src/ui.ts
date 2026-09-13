@@ -501,10 +501,8 @@ function renderChat() {
     '<button id="send" class="primary"' + (loading ? ' disabled' : '') + '>Send</button>' +
     '<button id="refresh">Re-read board</button>' +
     '</div>' +
-    '<div class="row">' +
     (droppable ? '<button id="drop">Drop last reply on board</button>' : '') +
     '<button id="done" class="ghost">I\'m good, thanks</button>' +
-    '</div>' +
     '<div class="muted tiny">' + escapeHtml(boardLine()) + '</div>' +
     '</div></div>'
   );
