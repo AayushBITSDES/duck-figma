@@ -17,7 +17,7 @@ Board reading works either way, no key, no cost. It is just pulling text off the
 - No key: fallback mode. Replies are canned templates with real sticky text dropped into them. The panel says so on screen, because it is not a conversation.
 - Key set: live mode. Real conversational replies, still using the board snapshot as context.
 
-Pick a provider in settings and paste a key. Keys are kept per provider, so you can switch without retyping.
+Pick a provider in settings and paste a key. One provider and one key are kept at a time, so switching provider means pasting that provider's key.
 
 | Provider | Model | Notes |
 | --- | --- | --- |
@@ -26,7 +26,7 @@ Pick a provider in settings and paste a key. Keys are kept per provider, so you 
 | Anthropic | `claude-haiku-4-5` | Paid, pay as you go. |
 | Google AI Studio | `gemini-3.8-flash` | Has a free tier. |
 
-Keys are stored locally via `figma.clientStorage`. In live mode, board text and your messages go to the selected provider on every chat turn, nowhere else.
+The key is stored locally via `figma.clientStorage`. In live mode, board text and your messages go to the selected provider on every chat turn, nowhere else.
 
 For tester builds, put an OpenRouter key in `SHARED_KEY` at the top of `src/ui.ts` and nobody has to set anything up. It ships inside the plugin, so it is public: free models only, and don't commit one.
 
@@ -51,10 +51,10 @@ That compiles `src/` and asserts against the compiled output: each provider's UR
 - Constants are at the top of `src/code.ts`. Provider definitions are at the top of `src/ui.ts`. Adding a provider means adding one entry there and one case in `test/adapters.test.js`.
 - Settings edits are held in a draft and applied on Save, so Back discards them rather than quietly pointing the next conversation somewhere else.
 - Keys saved by older builds (`openrouterApiKey`, `openaiApiKey`, `anthropicApiKey`) are migrated into the current settings on load, and only deleted once the migration has been written.
-- `code.ts` owns the stored settings. Saving sends only the entries the user changed; `code.ts` merges them onto whatever is actually in storage and reports back what landed. The UI never advances its own copy on its own say-so, so a settings screen working from a stale or failed read cannot wipe a key it never saw.
-- Saves are serialised, because read-modify-write is not atomic and two in flight would otherwise merge onto the same snapshot.
-- A save that cannot read storage is refused, not written blind.
-- Save stays on the settings screen with the form locked until `code.ts` confirms the write. A failure unlocks the form with the draft exactly as the user left it, so pressing Save again retries the whole change including the selected provider. There is no unconfirmed state held behind the user's back.
+- A save carries the whole of the settings, so it replaces rather than merges. There is no shared map for a stale screen to clobber and nothing for two saves to race over. Keeping a key per provider is what made that a problem, and it is gone.
+- The settings form waits for the stored settings to load before it will show an editable key field, so it can never seed an empty one and let Save wipe a real key.
+- Keys saved by older builds (`openrouterApiKey`, `openaiApiKey`, `anthropicApiKey`, and the per-provider `keys` map an earlier version of this branch used) are carried forward on load.
+- A reply that finishes while you have moved to another screen does not repaint over it.
 - Board snapshot caps at 40 items, 200 characters each. It is re-read before every reply, and the panel footer shows how many items the duck is working from.
 - All four providers answer CORS for a null origin, which is what a plugin iframe sends, so the plugin calls them directly with no proxy. Anthropic needs the `anthropic-dangerous-direct-browser-access` header; the others need nothing special.
 - API failures are shown as what they are (rejected key, rate limit, no network) instead of the duck pretending it lost its train of thought. Failed turns are kept out of the history sent to the model, and same-role turns are merged because Anthropic and Google require roles to alternate.

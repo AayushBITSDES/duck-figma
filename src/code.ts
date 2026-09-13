@@ -116,74 +116,34 @@ setInterval(() => {
 }, TICK_MS);
 
 async function loadSettings() {
-  let settings: { provider: string; keys: { [k: string]: string } } = { provider: 'openrouter', keys: {} };
-  let failed = false;
-  try {
-    settings = await readAndMigrateSettings();
-  } catch (e) {
-    // The UI blocks its settings screen on this message, so it has to be sent
-    // even when storage misbehaves. `failed` keeps that case distinguishable
-    // from an install that genuinely has no keys.
-    failed = true;
-  }
-  figma.ui.postMessage({ type: 'settings', settings, failed });
-}
-
-async function readAndMigrateSettings() {
-  const stored = (await figma.clientStorage.getAsync(STORE)) || {};
-  const keys: { [k: string]: string } = Object.assign({}, stored.keys || {});
-  let sawLegacy = false;
-  for (const entry of LEGACY_KEYS) {
-    const legacy = await figma.clientStorage.getAsync(entry[0]);
-    if (typeof legacy === 'string' && legacy.trim()) {
-      sawLegacy = true;
-      if (!keys[entry[1]]) keys[entry[1]] = legacy.trim();
-    }
-  }
-  const settings = { provider: stored.provider || 'openrouter', keys };
-  if (sawLegacy) {
-    await figma.clientStorage.setAsync(STORE, settings);
-    try {
-      // Persisted, so the old entries are now safe to drop. Best effort: the
-      // credentials are already migrated, and failing here must not discard
-      // settings that were read successfully.
-      for (const entry of LEGACY_KEYS) await figma.clientStorage.deleteAsync(entry[0]);
-    } catch (e) {}
-  }
-  return settings;
-}
-
-// This file owns the stored settings. The UI sends only what the user changed
-// and never assumes a write landed; every outcome is reported back, so the UI
-// mirrors storage instead of guessing at it.
-let saveQueue: Promise<void> = Promise.resolve();
-
-function saveSettings(provider: string, edits: { [k: string]: string | null }) {
-  // Read-modify-write is not atomic, so serialise. Two saves in flight would
-  // otherwise both merge onto the same snapshot and the later write would drop
-  // the earlier one's edit.
-  saveQueue = saveQueue.then(() => applySettings(provider, edits));
-  return saveQueue;
-}
-
-async function applySettings(provider: string, edits: { [k: string]: string | null }) {
+  const settings = { provider: 'openrouter', key: '' };
   try {
     const stored = (await figma.clientStorage.getAsync(STORE)) || {};
-    const keys: { [k: string]: string } = Object.assign({}, stored.keys || {});
-    for (const id of Object.keys(edits)) {
-      const value = edits[id];
-      if (value) keys[id] = value;
-      else delete keys[id];
+    if (stored.provider) settings.provider = stored.provider;
+    // `keys` is the per-provider shape an earlier build on this branch used.
+    settings.key = stored.key || (stored.keys && stored.keys[settings.provider]) || '';
+    if (!settings.key) {
+      for (const entry of LEGACY_KEYS) {
+        const legacy = await figma.clientStorage.getAsync(entry[0]);
+        if (typeof legacy === 'string' && legacy.trim()) {
+          settings.provider = entry[1];
+          settings.key = legacy.trim();
+          break;
+        }
+      }
+      if (settings.key) {
+        await figma.clientStorage.setAsync(STORE, settings);
+        // Migrated, so don't leave the old secrets lying around. Re-running
+        // this is harmless, so failing here costs nothing.
+        for (const entry of LEGACY_KEYS) await figma.clientStorage.deleteAsync(entry[0]);
+      }
     }
-    const settings = { provider, keys };
-    await figma.clientStorage.setAsync(STORE, settings);
-    figma.ui.postMessage({ type: 'settings', settings, saved: true });
   } catch (e) {
-    figma.notify("Couldn't save your settings.");
-    // Told, not silently dropped: the UI keeps the edits so they can be retried.
-    figma.ui.postMessage({ type: 'save-failed' });
+    // Fall through with the defaults; the UI just shows an empty key field.
   }
+  figma.ui.postMessage({ type: 'settings', settings });
 }
+
 
 loadSettings();
 
@@ -204,7 +164,11 @@ figma.ui.onmessage = (msg) => {
     dropSticky(msg.text || 'What are you stuck on?');
   }
 
+  // A save carries the whole of the settings, so there is nothing to merge onto
+  // and nothing for two saves to race over.
   if (msg.type === 'save-settings') {
-    saveSettings(msg.provider, msg.edits || {});
+    figma.clientStorage
+      .setAsync(STORE, { provider: msg.provider, key: msg.key || '' })
+      .catch(() => figma.notify("Couldn't save your settings."));
   }
 };

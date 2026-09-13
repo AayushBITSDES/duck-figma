@@ -28,7 +28,7 @@ const PROVIDERS: Record<ProviderId, Provider> = {
   openrouter: {
     label: 'OpenRouter',
     model: 'thinkingmachines/inkling:free',
-    hint: 'sk-or-v1-...  free, 20 req/min and 50/day per account',
+    hint: 'sk-or-v1-...',
     url: 'https://openrouter.ai/api/v1/chat/completions',
     headers: (key) => ({ 'Content-Type': 'application/json', Authorization: 'Bearer ' + key }),
     body: (system, msgs) => openAiBody(PROVIDERS.openrouter.model, system, msgs),
@@ -37,7 +37,7 @@ const PROVIDERS: Record<ProviderId, Provider> = {
   openai: {
     label: 'OpenAI',
     model: 'gpt-5.6-luna',
-    hint: 'sk-...  paid, pay as you go',
+    hint: 'sk-...',
     url: 'https://api.openai.com/v1/chat/completions',
     headers: (key) => ({ 'Content-Type': 'application/json', Authorization: 'Bearer ' + key }),
     body: (system, msgs) => openAiBody(PROVIDERS.openai.model, system, msgs),
@@ -46,7 +46,7 @@ const PROVIDERS: Record<ProviderId, Provider> = {
   anthropic: {
     label: 'Anthropic',
     model: 'claude-haiku-4-5',
-    hint: 'sk-ant-...  paid, pay as you go',
+    hint: 'sk-ant-...',
     url: 'https://api.anthropic.com/v1/messages',
     headers: (key) => ({
       'Content-Type': 'application/json',
@@ -65,7 +65,7 @@ const PROVIDERS: Record<ProviderId, Provider> = {
   google: {
     label: 'Google AI Studio',
     model: 'gemini-3.8-flash',
-    hint: 'AIza...  free tier available',
+    hint: 'AIza...',
     url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent',
     headers: (key) => ({ 'Content-Type': 'application/json', 'x-goog-api-key': key }),
     body: (system, msgs) => ({
@@ -95,31 +95,21 @@ const PROVIDER_IDS: ProviderId[] = ['openrouter', 'openai', 'anthropic', 'google
 
 const root = document.getElementById('root')!;
 let mode: Mode = 'idle';
-let provider: ProviderId = 'openrouter';
-let keys: { [k: string]: string } = {};
 let messages: ChatMsg[] = [];
 let loading = false;
 let boardItems: string[] = [];
 let boardReadAt = 0;
-// Settings edits live here until Save, so Back discards them instead of
-// silently pointing the next conversation at a provider that was never saved.
-let draftProvider: ProviderId = 'openrouter';
-let draftKeys: { [k: string]: string } = {};
-// code.ts reads storage over several async round-trips before it can send the
-// saved settings. Until that lands, seeding a draft would snapshot an empty key
-// map, and saving it would wipe every other provider's key.
+let provider: ProviderId = 'openrouter';
+let storedKey = '';
+// code.ts reads storage over a couple of async hops. Until that lands, seeding
+// the settings form would show an empty key and saving it would wipe the real
+// one, so the form waits.
 let settingsLoaded = false;
-let settingsFailed = false;
-// `keys` mirrors what code.ts has confirmed is in storage, and only a
-// confirmation advances it. Save stays on this screen until that confirmation
-// arrives, so there is never unconfirmed state sitting behind the user's back:
-// the draft on screen is the only copy of what they are trying to save.
-let seededKeys: { [k: string]: string } = {};
-let saving = false;
+let draftProvider: ProviderId = 'openrouter';
+let draftKey = '';
 
 function activeKey(): string {
-  const stored = (keys[provider] || '').trim();
-  if (stored) return stored;
+  if (storedKey.trim()) return storedKey.trim();
   return provider === 'openrouter' ? SHARED_KEY.trim() : '';
 }
 
@@ -243,31 +233,8 @@ function openSettings() {
     return;
   }
   draftProvider = provider;
-  draftKeys = Object.assign({}, keys);
-  seededKeys = Object.assign({}, keys);
+  draftKey = storedKey;
   showSettings();
-}
-
-// Only the entries the user actually changed. null means remove. code.ts merges
-// these onto real storage, so a draft seeded from a stale or failed read can
-// never wipe a provider the user never touched.
-function draftEdits(): { [k: string]: string | null } {
-  const edits: { [k: string]: string | null } = {};
-  for (const id of PROVIDER_IDS) {
-    const before = seededKeys[id] || '';
-    const after = draftKeys[id] || '';
-    if (before !== after) edits[id] = after || null;
-  }
-  return edits;
-}
-
-// Reads whatever is in the key field into the draft before the screen redraws.
-function stashDraftKey() {
-  const input = document.getElementById('key-input') as HTMLInputElement | null;
-  if (!input) return;
-  const val = input.value.trim();
-  if (val) draftKeys[draftProvider] = val;
-  else delete draftKeys[draftProvider];
 }
 
 function showSettings() {
@@ -276,57 +243,39 @@ function showSettings() {
   const options = PROVIDER_IDS.map(
     (id) =>
       '<option value="' + id + '"' + (id === draftProvider ? ' selected' : '') + '>' +
-      escapeHtml(PROVIDERS[id].label) + (draftKeys[id] ? ' (key saved)' : '') +
-      '</option>'
+      escapeHtml(PROVIDERS[id].label) + '</option>'
   ).join('');
   render(
     '<div class="screen">' + header('settings') +
     '<div class="body">' +
     '<div><label for="provider">Provider</label>' +
-    '<select id="provider"' + (saving ? ' disabled' : '') + '>' + options + '</select></div>' +
+    '<select id="provider">' + options + '</select></div>' +
     '<div><label for="key-input">API key</label>' +
-    '<input id="key-input" type="text" spellcheck="false" autocomplete="off"' + (saving ? ' disabled' : '') + ' placeholder="' + escapeAttr(p.hint) + '" value="' + escapeAttr(draftKeys[draftProvider] || '') + '" /></div>' +
-    (settingsFailed
-      ? '<div class="bubble err">Couldn\'t reach your saved settings. What you type here is kept and will be sent again when you press Save.</div>'
-      : '') +
+    '<input id="key-input" type="text" spellcheck="false" autocomplete="off" placeholder="' + escapeAttr(p.hint) + '" value="' + escapeAttr(draftKey) + '" /></div>' +
     '<div class="muted tiny">Model: ' + escapeHtml(p.model) + '</div>' +
-    '<div class="muted tiny">Keys are stored on this device only. In live mode your board text and messages go to ' + escapeHtml(p.label) + ' and nowhere else. Without a key I still read the board, but replies are canned templates rather than a conversation.</div>' +
+    '<div class="muted tiny">Your key is stored on this device only. In live mode your board text and messages go to ' + escapeHtml(p.label) + ' and nowhere else. Without a key I still read the board, but replies are canned templates rather than a conversation.</div>' +
     '</div>' +
     '<div class="ftr">' +
-    '<button id="save" class="primary"' + (saving ? ' disabled' : '') + '>' + (saving ? 'Saving...' : 'Save') + '</button>' +
-    '<div class="row">' +
-    (draftKeys[draftProvider] && !saving ? '<button id="clear">Remove key</button>' : '') +
-    (saving ? '' : '<button id="back" class="ghost">Back</button>') +
-    '</div></div></div>'
+    '<button id="save" class="primary">Save</button>' +
+    '<button id="back" class="ghost">Back</button>' +
+    '</div></div>'
   );
   const select = document.getElementById('provider') as HTMLSelectElement;
-  if (saving) return;
+  const input = document.getElementById('key-input') as HTMLInputElement;
   select.onchange = () => {
-    stashDraftKey();
     draftProvider = select.value as ProviderId;
+    // One key is kept, for the provider in use. Switching to a different one
+    // needs its own key; switching back brings the saved one into view again.
+    draftKey = draftProvider === provider ? storedKey : '';
     showSettings();
   };
   document.getElementById('save')!.onclick = () => {
-    if (saving) return;
-    stashDraftKey();
-    saving = true;
-    settingsFailed = false;
-    post({ type: 'save-settings', provider: draftProvider, edits: draftEdits() });
-    showSettings();
-  };
-  const clear = document.getElementById('clear');
-  if (clear) clear.onclick = () => {
-    delete draftKeys[draftProvider];
-    showSettings();
+    provider = draftProvider;
+    storedKey = input.value.trim();
+    post({ type: 'save-settings', provider: provider, key: storedKey });
+    idleDuck();
   };
   document.getElementById('back')!.onclick = idleDuck;
-}
-
-// The draft is untouched, so unlocking the form is enough for a retry.
-function saveFailed() {
-  saving = false;
-  settingsFailed = true;
-  if (mode === 'settings') showSettings();
 }
 
 function showCheckIn() {
@@ -565,25 +514,12 @@ window.onmessage = (event) => {
   }
   // Back to work: stand down only if the duck is still just asking.
   if (msg.type === 'resume' && mode === 'checkin') idleDuck();
-  // Pressing Save resends the draft as-is, selected provider included.
-  if (msg.type === 'save-failed') saveFailed();
   if (msg.type === 'settings') {
     const settings = msg.settings || {};
     if (PROVIDERS[settings.provider as ProviderId]) provider = settings.provider;
-    keys = settings.keys || {};
+    storedKey = settings.key || '';
     settingsLoaded = true;
-    settingsFailed = !!msg.failed;
-    // Never gate this on the current screen: an async reply landing first can
-    // move the user elsewhere, and a save left marked in flight locks the
-    // settings form for the rest of the session.
-    const wasSaving = saving;
-    saving = false;
-    if (mode === 'settings') {
-      // Either the save being waited on, which closes the screen, or the
-      // startup load releasing the wait state. Nothing else sends this message.
-      if (wasSaving) idleDuck();
-      else openSettings();
-    }
+    if (mode === 'settings') openSettings();
   }
 };
 

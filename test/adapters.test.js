@@ -1,6 +1,6 @@
 /*
  * Runs against the COMPILED output in .test-build, not a reimplementation, so
- * these assertions break when the real adapters drift.
+ * these break when the real code drifts.
  *
  *   npm test
  *
@@ -17,16 +17,12 @@ let passed = 0;
 
 function check(name, actual, expected) {
   const ok = JSON.stringify(actual) === JSON.stringify(expected);
-  if (ok) passed++;
-  else {
-    failed++;
-    console.log('FAIL ' + name + '\n  got:  ' + JSON.stringify(actual) + '\n  want: ' + JSON.stringify(expected));
-    return;
-  }
-  console.log('pass ' + name);
+  if (ok) { passed++; console.log('pass ' + name); return; }
+  failed++;
+  console.log('FAIL ' + name + '\n  got:  ' + JSON.stringify(actual) + '\n  want: ' + JSON.stringify(expected));
 }
 
-/* ---------------------------------------------------------------- ui.ts --- */
+/* ------------------------------------------------------------ fake DOM --- */
 
 const els = {};
 function el(id) {
@@ -43,68 +39,53 @@ function el(id) {
   }
   return els[id];
 }
-
-// A real render replaces the DOM, so stale nodes and the values typed into them
-// are gone. Without this the stub would leak a previous screen's input value
-// into the next one and invent bugs that a browser would never have.
+// A real render replaces the DOM, so stale nodes and anything typed into them
+// are gone. Without this the stub leaks one screen's input into the next.
 function rerender(html) {
   for (const k of Object.keys(els)) if (k !== 'root') delete els[k];
-  const unescape = (v) => v.replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+  const unescape = (v) => v.replace(/&quot;/g, '"').replace(/&amp;/g, '&');
   const input = /id="key-input"[^>]*\svalue="([^"]*)"/.exec(html);
   if (input) el('key-input').value = unescape(input[1]);
   const selected = /<option value="([^"]+)" selected>/.exec(html);
   if (selected) el('provider').value = selected[1];
 }
-global.document = {
-  getElementById: el,
-  createElement: () => el('scratch-' + Math.random()),
-  querySelectorAll: () => [],
-};
+global.document = { getElementById: el, createElement: () => el('tmp' + Math.random()), querySelectorAll: () => [] };
 const posted = [];
 global.parent = { postMessage: (m) => posted.push(m.pluginMessage) };
 global.window = {};
 
 let lastCall = null;
 let nextResponse = null;
-global.fetch = async (url, opts) => {
-  lastCall = { url: url, opts: opts };
-  return nextResponse;
-};
+global.fetch = async (url, opts) => { lastCall = { url, opts }; return nextResponse; };
 
 const uiSrc = fs.readFileSync(path.join(BUILD, 'ui.js'), 'utf8');
 
-// Each call boots a fresh copy of the compiled UI with its own module state, so
-// startup-ordering cases can be tested without leaking into the others.
+// Each call boots a fresh copy of the compiled UI with its own module state.
 function makeUi() {
-  const api = newUiInstance();
-  api.deliver = (pluginMessage) => window.onmessage({ data: { pluginMessage: pluginMessage } });
+  const api = new Function(uiSrc + `; return {
+    get messages(){return messages}, set messages(v){messages=v},
+    set boardItems(v){boardItems=v},
+    get provider(){return provider}, set provider(v){provider=v},
+    get storedKey(){return storedKey}, set storedKey(v){storedKey=v},
+    get mode(){return mode}, get loading(){return loading},
+    set fallbackTurn(v){fallbackTurn=v}, set fallbackItemCursor(v){fallbackItemCursor=v},
+    PROVIDERS, activeKey, askDuck, apiMessages, apiErrorMessage, emptyReason,
+    fallbackReply, openSettings, idleDuck, sendUserText };`)();
+  api.deliver = (m) => window.onmessage({ data: { pluginMessage: m } });
   return api;
 }
 
-function newUiInstance() { return new Function(uiSrc + `; return {
-  get messages(){return messages}, set messages(v){messages=v},
-  set boardItems(v){boardItems=v},
-  get provider(){return provider}, set provider(v){provider=v},
-  get keys(){return keys}, set keys(v){keys=v},
-  get draftProvider(){return draftProvider}, get mode(){return mode},
-  get saving(){return saving}, get loading(){return loading}, sendUserText, idleDuck,
-  set fallbackTurn(v){fallbackTurn=v}, set fallbackItemCursor(v){fallbackItemCursor=v},
-  PROVIDERS, activeKey, askDuck, apiMessages, apiErrorMessage, emptyReason,
-  fallbackReply, openSettings, idleDuck };`)(); }
-
+const ok = (payload) => ({ ok: true, status: 200, json: async () => payload });
 const ui = makeUi();
 
-const ok = (payload) => ({ ok: true, status: 200, json: async () => payload });
-
 async function run() {
-  // Real startup order: code.ts sends the saved settings, then the board.
-  ui.deliver({ type: 'settings', settings: { provider: 'openrouter', keys: {} } });
+  ui.deliver({ type: 'settings', settings: { provider: 'openrouter', key: 'sk-or-v1-x' } });
   ui.deliver({ type: 'board-context', board: ['nav | search', 'onboarding copy'] });
   const convo = [{ role: 'user', content: 'I am stuck.' }];
   let b;
 
   // --- OpenRouter -----------------------------------------------------------
-  ui.provider = 'openrouter'; ui.keys = { openrouter: 'sk-or-v1-x' }; ui.messages = convo.slice();
+  ui.messages = convo.slice();
   nextResponse = ok({ choices: [{ finish_reason: 'stop', message: { content: 'Quack.' } }] });
   await ui.askDuck();
   b = JSON.parse(lastCall.opts.body);
@@ -113,10 +94,11 @@ async function run() {
   check('openrouter: model is a free one', [b.model, b.model.endsWith(':free')], ['thinkingmachines/inkling:free', true]);
   check('openrouter: max_completion_tokens, not max_tokens', [b.max_completion_tokens, b.max_tokens], [220, undefined]);
   check('openrouter: system is the first message', b.messages[0].role, 'system');
+  check('openrouter: board snapshot reaches the model', b.messages[0].content.includes('nav | search'), true);
   check('openrouter: reply read', ui.messages[1].content, 'Quack.');
 
   // --- OpenAI ---------------------------------------------------------------
-  ui.provider = 'openai'; ui.keys = { openai: 'sk-o' }; ui.messages = convo.slice();
+  ui.provider = 'openai'; ui.storedKey = 'sk-o'; ui.messages = convo.slice();
   nextResponse = ok({ choices: [{ message: { content: 'Hi.' } }] });
   await ui.askDuck();
   b = JSON.parse(lastCall.opts.body);
@@ -125,7 +107,7 @@ async function run() {
   check('openai: max_completion_tokens, not max_tokens', [b.max_completion_tokens, b.max_tokens], [220, undefined]);
 
   // --- Anthropic ------------------------------------------------------------
-  ui.provider = 'anthropic'; ui.keys = { anthropic: 'sk-ant-x' }; ui.messages = convo.slice();
+  ui.provider = 'anthropic'; ui.storedKey = 'sk-ant-x'; ui.messages = convo.slice();
   nextResponse = ok({ content: [{ type: 'text', text: 'Quack quack.' }] });
   await ui.askDuck();
   b = JSON.parse(lastCall.opts.body);
@@ -133,13 +115,15 @@ async function run() {
   check('anthropic: url', lastCall.url, 'https://api.anthropic.com/v1/messages');
   check('anthropic: model', b.model, 'claude-haiku-4-5');
   check('anthropic: x-api-key, not bearer', [h['x-api-key'], h.Authorization], ['sk-ant-x', undefined]);
-  check('anthropic: version + browser opt-in headers', [h['anthropic-version'], h['anthropic-dangerous-direct-browser-access']], ['2023-06-01', 'true']);
-  check('anthropic: system is top level, first message is the user', [typeof b.system, b.messages[0].role], ['string', 'user']);
+  check('anthropic: version + browser opt-in headers',
+    [h['anthropic-version'], h['anthropic-dangerous-direct-browser-access']], ['2023-06-01', 'true']);
+  check('anthropic: system is top level, first message is the user',
+    [typeof b.system, b.messages[0].role], ['string', 'user']);
   check('anthropic: max_tokens, not max_completion_tokens', [b.max_tokens, b.max_completion_tokens], [220, undefined]);
   check('anthropic: reply read from content[0].text', ui.messages[1].content, 'Quack quack.');
 
   // --- Google ---------------------------------------------------------------
-  ui.provider = 'google'; ui.keys = { google: 'AIzaX' };
+  ui.provider = 'google'; ui.storedKey = 'AIzaX';
   ui.messages = [
     { role: 'user', content: 'hi' },
     { role: 'assistant', content: 'hello' },
@@ -148,14 +132,15 @@ async function run() {
   nextResponse = ok({ candidates: [{ content: { parts: [{ text: 'Quack!' }] } }] });
   await ui.askDuck();
   b = JSON.parse(lastCall.opts.body);
-  check('google: url pins the model', lastCall.url, 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent');
+  check('google: url pins the model', lastCall.url,
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent');
   check('google: x-goog-api-key', lastCall.opts.headers['x-goog-api-key'], 'AIzaX');
   check('google: system becomes systemInstruction', typeof b.systemInstruction.parts[0].text, 'string');
   check('google: assistant role is renamed to model', b.contents.map((c) => c.role), ['user', 'model', 'user']);
   check('google: cap is maxOutputTokens', b.generationConfig.maxOutputTokens, 220);
   check('google: reply read from candidates', ui.messages[3].content, 'Quack!');
 
-  // --- History hygiene ------------------------------------------------------
+  // --- Cross-cutting --------------------------------------------------------
   ui.messages = [
     { role: 'user', content: 'first' },
     { role: 'assistant', content: 'rejected that key', error: true },
@@ -164,14 +149,11 @@ async function run() {
   check('errors dropped, same-role turns merged so roles alternate',
     ui.apiMessages(), [{ role: 'user', content: 'first\n\nsecond' }]);
 
-  // --- Key scoping ----------------------------------------------------------
-  ui.provider = 'anthropic'; ui.keys = {};
-  check('shared tester key is openrouter-only', ui.activeKey(), '');
+  ui.provider = 'anthropic'; ui.storedKey = '';
+  check('the shipped tester key is openrouter-only', ui.activeKey(), '');
   ui.provider = 'openrouter';
-  check('openrouter falls back to the shared tester key',
-    ui.activeKey(), uiSrc.match(/SHARED_KEY = '(.*)'/)[1]);
+  check('openrouter falls back to the shipped tester key', ui.activeKey(), uiSrc.match(/SHARED_KEY = '(.*)'/)[1]);
 
-  // --- Error copy -----------------------------------------------------------
   ui.provider = 'google';
   check('google 400 reads as a key problem', ui.apiErrorMessage(400, 'API key not valid').includes('rejected that key'), true);
   ui.provider = 'openrouter';
@@ -187,188 +169,94 @@ async function run() {
     ui.emptyReason({ candidates: [{ finishReason: 'SAFETY' }] }).includes('content filter'),
   ], [true, true, true, true]);
 
-  // --- Keyless fallback -----------------------------------------------------
   ui.boardItems = ['nav | search', 'onboarding copy'];
   ui.fallbackTurn = 0; ui.fallbackItemCursor = 0;
   const r = [ui.fallbackReply(true), ui.fallbackReply(), ui.fallbackReply()];
   check('keyless fallback quotes the real board',
     [r[0].startsWith('I can see 2 things'), r[0].includes('nav | search'), new Set(r).size], [true, true, 3]);
 
-  // --- Settings are a draft until Save --------------------------------------
-  ui.provider = 'openrouter';
-  ui.keys = { openrouter: 'sk-or-keep', anthropic: 'sk-ant-keep' };
-  ui.openSettings();
+  // --- Settings -------------------------------------------------------------
+  const set = makeUi();
+  set.deliver({ type: 'settings', settings: { provider: 'openrouter', key: 'sk-or-saved' } });
+  set.openSettings();
+  el('key-input').value = 'typed-then-abandoned';
+  el('back').onclick();
+  check('Back discards an edited key', [set.storedKey, set.mode], ['sk-or-saved', 'idle']);
+
+  set.openSettings();
   el('provider').value = 'anthropic';
   el('provider').onchange();
-  check('switching the dropdown does not change the live provider', ui.provider, 'openrouter');
-  check('switching the dropdown does move the draft', ui.draftProvider, 'anthropic');
-  el('back').onclick();
-  check('Back discards the provider change', ui.provider, 'openrouter');
+  check('switching provider clears the key field, since only one is kept', el('key-input').value, '');
+  el('provider').value = 'openrouter';
+  el('provider').onchange();
+  check('switching back brings the saved key into view', el('key-input').value, 'sk-or-saved');
 
-  ui.openSettings();
-  el('key-input').value = 'sk-or-typed-but-abandoned';
-  el('back').onclick();
-  check('Back discards an edited key', ui.keys.openrouter, 'sk-or-keep');
-
-  ui.openSettings();
   el('provider').value = 'google';
   el('provider').onchange();
   el('key-input').value = 'AIza-new';
   posted.length = 0;
   el('save').onclick();
   const saved = posted.filter((m) => m.type === 'save-settings').pop();
-  check('Save sends one message with only what changed, never the whole map',
-    [posted.filter((m) => m.type === 'save-settings').length, saved.provider, saved.edits, 'keys' in saved],
-    [1, 'google', { google: 'AIza-new' }, false]);
-  check('Save does not advance local state before code.ts confirms',
-    [ui.provider, ui.keys.google], ['openrouter', undefined]);
-  check('Save waits on the settings screen with the form locked',
-    [ui.mode, ui.saving], ['settings', true]);
-  const lockedHtml = el('root').innerHTML;
-  check('and offers no way to fire a second save while the first is pending',
-    [lockedHtml.indexOf('Saving...') > -1, typeof el('save').onclick], [true, 'object']);
+  check('Save sends the whole of the settings', [saved.provider, saved.key], ['google', 'AIza-new']);
+  check('and applies them', [set.provider, set.storedKey, set.mode], ['google', 'AIza-new', 'idle']);
 
-  ui.deliver({ type: 'settings', saved: true, settings: { provider: 'google', keys: { openrouter: 'sk-or-keep', anthropic: 'sk-ant-keep', google: 'AIza-new' } } });
-  check('the confirmation is what moves the live provider and keys',
-    [ui.provider, ui.keys.google, ui.keys.openrouter], ['google', 'AIza-new', 'sk-or-keep']);
-  check('and closes the settings screen', [ui.mode, ui.saving], ['idle', false]);
+  // Opening settings before startup finishes must not seed an empty key and
+  // let Save wipe the real one.
+  const early = makeUi();
+  early.openSettings();
+  const earlyHtml = el('root').innerHTML;
+  check('settings opened before load waits, with nothing to Save',
+    [earlyHtml.indexOf('Loading') > -1, earlyHtml.indexOf('id="save"') > -1], [true, false]);
+  early.deliver({ type: 'settings', settings: { provider: 'anthropic', key: 'sk-ant-saved' } });
+  check('and seeds itself once the settings arrive',
+    [el('provider').value, el('key-input').value], ['anthropic', 'sk-ant-saved']);
 
-  // --- An in-flight reply must not stomp or wedge another screen ------------
-  // Pre-existing: a finished reply repainted the chat over whatever the user
-  // had moved to. With the save lock that also left settings locked forever.
+  // --- An in-flight reply must not repaint over another screen --------------
   const stomp = makeUi();
-  stomp.deliver({ type: 'settings', settings: { provider: 'openrouter', keys: { openrouter: 'sk-or' } } });
+  stomp.deliver({ type: 'settings', settings: { provider: 'openrouter', key: 'sk-or' } });
   stomp.messages = [];
   const reply = stomp.sendUserText('still there?');
-  // User leaves the chat and saves a settings change while the reply is out.
+  check('the panel shows thinking while a reply is expected', stomp.loading, true);
   stomp.idleDuck();
   stomp.openSettings();
-  el('key-input').value = 'sk-or-2';
-  el('save').onclick();
-  check('the settings screen is locked while its save is in flight',
-    [stomp.mode, stomp.saving], ['settings', true]);
-
-  // The reply lands first, on a screen the user is no longer looking at.
   stomp.deliver({ type: 'board-context', board: [] });
   await reply;
   check('a reply landing elsewhere does not repaint over settings', stomp.mode, 'settings');
 
-  // Now storage confirms.
-  stomp.deliver({ type: 'settings', saved: true, settings: { provider: 'openrouter', keys: { openrouter: 'sk-or-2' } } });
-  check('the confirmation still unlocks the save wherever the user is',
-    [stomp.saving, stomp.mode], [false, 'idle']);
-  stomp.openSettings();
-  check('and settings is usable again, not stuck on Saving...',
-    el('root').innerHTML.indexOf('Saving...') > -1, false);
-
-  // --- Settings opened before startup finishes ------------------------------
-  // code.ts needs several storage round-trips before it can send the saved
-  // settings. Seeding a draft from the empty pre-load state and then saving it
-  // would persist that emptiness over every provider's key.
-  const early = makeUi();
-  early.openSettings();
-  const earlyHtml = el('root').innerHTML;
-  check('settings opened before load shows a wait state, with nothing to Save',
-    [earlyHtml.indexOf('Loading') > -1, earlyHtml.indexOf('id="save"') > -1], [true, false]);
-
-  early.deliver({ type: 'settings', settings: { provider: 'anthropic', keys: { openrouter: 'sk-or-saved', anthropic: 'sk-ant-saved' } } });
-  check('the screen re-seeds itself once settings arrive', el('provider').value, 'anthropic');
-
-  el('key-input').value = 'sk-ant-edited';
-  posted.length = 0;
-  el('save').onclick();
-  check('saving after a late load sends only the edited provider',
-    posted.filter((m) => m.type === 'save-settings').pop().edits, { anthropic: 'sk-ant-edited' });
-
-  // --- A save that failed must stay retryable -------------------------------
-  // The draft never leaves the screen, so a retry resends exactly what the user
-  // had, provider included, with no pending-edit bookkeeping to get out of sync.
-  const retry = makeUi();
-  retry.deliver({ type: 'settings', settings: { provider: 'openrouter', keys: { openrouter: 'sk-or-saved' } } });
-  retry.openSettings();
-  el('provider').value = 'google';
-  el('provider').onchange();
-  el('key-input').value = 'AIza-new';
-  el('save').onclick();
-  retry.deliver({ type: 'save-failed' });
-  check('a failed save leaves the confirmed keys untouched',
-    [retry.keys.openrouter, retry.keys.google], ['sk-or-saved', undefined]);
-  check('and unlocks the form rather than closing it', [retry.mode, retry.saving], ['settings', false]);
-  check('with what the user typed still in place', el('key-input').value, 'AIza-new');
-  check('and the provider they picked still selected', el('provider').value, 'google');
-
-  posted.length = 0;
-  el('save').onclick();
-  const resent = posted.filter((m) => m.type === 'save-settings').pop();
-  check('pressing Save again resends the whole change, provider included',
-    [resent.provider, resent.edits], ['google', { google: 'AIza-new' }]);
-
-  retry.deliver({ type: 'settings', saved: true, settings: { provider: 'google', keys: { openrouter: 'sk-or-saved', google: 'AIza-new' } } });
-  retry.openSettings();
-  posted.length = 0;
-  el('save').onclick();
-  check('once confirmed, a further Save sends nothing to redo',
-    posted.filter((m) => m.type === 'save-settings').pop().edits, {});
-
-  // --- Losing the key mid-send must not wedge the chat ----------------------
+  // Losing the key mid-send used to leave the panel stuck on "thinking...".
   const wedge = makeUi();
-  wedge.deliver({ type: 'settings', settings: { provider: 'openrouter', keys: { openrouter: 'sk-or' } } });
+  wedge.deliver({ type: 'settings', settings: { provider: 'openrouter', key: 'sk-or' } });
   wedge.messages = [];
   const inflight = wedge.sendUserText('are you there');
-  check('the panel shows thinking while a reply is expected', wedge.loading, true);
-  // The key is removed while the board request is still outstanding.
-  wedge.deliver({ type: 'settings', saved: true, settings: { provider: 'openrouter', keys: {} } });
+  wedge.deliver({ type: 'settings', settings: { provider: 'openrouter', key: '' } });
   wedge.deliver({ type: 'board-context', board: [] });
   await inflight;
   check('losing the key mid-send falls back instead of hanging on thinking',
     [wedge.loading, wedge.messages.length], [false, 2]);
 
-
-  // Storage failure still has to unblock the screen.
-  const broken = makeUi();
-  broken.openSettings();
-  broken.deliver({ type: 'settings', settings: null });
-  check('a settings message with no payload still unblocks the screen', typeof el('save').onclick, 'function');
-
   await runCodeTests();
-
   console.log('\n' + passed + ' passed, ' + failed + ' failed');
   if (failed) process.exit(1);
 }
 
 /* -------------------------------------------------------------- code.ts --- */
 
-// Boots code.js against a stub Figma and checks the one-way door: upgrading
-// must not throw away keys saved by earlier builds under their old names.
-function bootPlugin(store, failOn) {
+function bootPlugin(store) {
   const state = Object.assign({}, store);
   const sent = [];
-  const notified = [];
-  const fail = failOn || {};
   const realSetInterval = global.setInterval;
   global.setInterval = () => 0;
   global.__html__ = '<html></html>';
   global.figma = {
-    showUI: () => {},
-    on: () => {},
-    notify: (t) => { notified.push(t); },
+    showUI: () => {}, on: () => {}, notify: () => {},
     currentPage: { findAll: () => [], selection: [] },
     viewport: { center: { x: 0, y: 0 } },
     activeUsers: [],
     ui: { postMessage: (m) => sent.push(m), onmessage: null },
     clientStorage: {
-      getAsync: async (k) => {
-        if (fail.get === k) throw new Error('storage unavailable');
-        return k in state ? state[k] : undefined;
-      },
-      setAsync: async (k, v) => {
-        if (fail.set === k) throw new Error('storage unavailable');
-        state[k] = v;
-      },
-      deleteAsync: async (k) => {
-        if (fail.del === k) throw new Error('storage unavailable');
-        delete state[k];
-      },
+      getAsync: async (k) => (k in state ? state[k] : undefined),
+      setAsync: async (k, v) => { state[k] = v; },
+      deleteAsync: async (k) => { delete state[k]; },
     },
     createSticky: () => ({ text: {}, remove: () => {} }),
     loadFontAsync: async () => {},
@@ -378,9 +266,7 @@ function bootPlugin(store, failOn) {
   global.setInterval = realSetInterval;
   return {
     state: state,
-    sent: sent,
-    notified: notified,
-    send: (msg) => stub.ui.onmessage(msg),
+    send: (m) => stub.ui.onmessage(m),
     settings: () => sent.filter((m) => m.type === 'settings').pop(),
   };
 }
@@ -388,100 +274,37 @@ function bootPlugin(store, failOn) {
 const settled = () => new Promise((r) => setTimeout(r, 0));
 
 async function runCodeTests() {
-  // An install from the OpenRouter-only build.
-  let boot = bootPlugin({ openrouterApiKey: 'sk-or-v1-legacy' });
+  let boot = bootPlugin({ duckSettings: { provider: 'google', key: 'AIza' } });
   await settled();
-  let msg = boot.sent.filter((m) => m.type === 'settings').pop();
-  check('legacy openrouter key is migrated, not destroyed', msg.settings.keys.openrouter, 'sk-or-v1-legacy');
-  check('migrated settings are persisted', boot.state.duckSettings.keys.openrouter, 'sk-or-v1-legacy');
-  check('legacy entry is removed only after the write', 'openrouterApiKey' in boot.state, false);
+  check('saved settings are handed to the UI', boot.settings().settings, { provider: 'google', key: 'AIza' });
 
-  // Older installs: both of these name providers the plugin still supports.
-  boot = bootPlugin({ anthropicApiKey: 'sk-ant-legacy', openaiApiKey: 'sk-openai-legacy' });
-  await settled();
-  msg = boot.sent.filter((m) => m.type === 'settings').pop();
-  check('legacy anthropic and openai keys are migrated too',
-    [msg.settings.keys.anthropic, msg.settings.keys.openai], ['sk-ant-legacy', 'sk-openai-legacy']);
-
-  // Already migrated: a saved key must never be clobbered by a stale legacy one.
-  boot = bootPlugin({
-    duckSettings: { provider: 'google', keys: { openrouter: 'sk-or-current' } },
-    openrouterApiKey: 'sk-or-stale',
-  });
-  await settled();
-  msg = boot.sent.filter((m) => m.type === 'settings').pop();
-  check('a stale legacy entry never overwrites the saved key', msg.settings.keys.openrouter, 'sk-or-current');
-  check('the saved provider survives', msg.settings.provider, 'google');
-
-  // Nothing stored at all.
   boot = bootPlugin({});
   await settled();
-  msg = boot.sent.filter((m) => m.type === 'settings').pop();
-  check('a fresh install starts on openrouter with no keys', [msg.settings.provider, msg.settings.keys], ['openrouter', {}]);
-  check('a fresh install writes nothing to storage', Object.keys(boot.state).length, 0);
+  check('a fresh install starts on openrouter with no key',
+    boot.settings().settings, { provider: 'openrouter', key: '' });
+  check('and writes nothing to storage', Object.keys(boot.state).length, 0);
 
-  // --- Saving is a merge onto real storage, never a replace ----------------
-  boot = bootPlugin({ duckSettings: { provider: 'openrouter', keys: { openrouter: 'sk-or', anthropic: 'sk-ant', google: 'AIza' } } });
+  // A key saved by an older build must survive the upgrade, not be deleted.
+  boot = bootPlugin({ anthropicApiKey: 'sk-ant-legacy' });
   await settled();
-  boot.send({ type: 'save-settings', provider: 'google', edits: { google: 'AIza-new' } });
-  await settled();
-  check('an edit to one provider leaves the others alone',
-    boot.state.duckSettings.keys, { openrouter: 'sk-or', anthropic: 'sk-ant', google: 'AIza-new' });
-  check('and the selected provider is stored', boot.state.duckSettings.provider, 'google');
+  check('a legacy key is migrated rather than destroyed',
+    boot.settings().settings, { provider: 'anthropic', key: 'sk-ant-legacy' });
+  check('and is persisted under the current name', boot.state.duckSettings.key, 'sk-ant-legacy');
+  check('with the old entry cleaned up', 'anthropicApiKey' in boot.state, false);
 
-  boot.send({ type: 'save-settings', provider: 'google', edits: { anthropic: null } });
+  // The per-provider shape an earlier build on this branch wrote.
+  boot = bootPlugin({ duckSettings: { provider: 'openai', keys: { openai: 'sk-o', google: 'AIza' } } });
   await settled();
-  check('a null edit removes just that key',
-    boot.state.duckSettings.keys, { openrouter: 'sk-or', google: 'AIza-new' });
+  check('the older per-provider shape is read through',
+    boot.settings().settings, { provider: 'openai', key: 'sk-o' });
 
-  // A save from a UI that believes storage is empty must still not wipe it.
-  boot.send({ type: 'save-settings', provider: 'openai', edits: { openai: 'sk-o' } });
+  // Saving writes the whole of the settings, so there is nothing to merge.
+  boot = bootPlugin({ duckSettings: { provider: 'openrouter', key: 'old' } });
   await settled();
-  check('a save from a UI with a stale view cannot wipe stored keys',
-    boot.state.duckSettings.keys, { openrouter: 'sk-or', google: 'AIza-new', openai: 'sk-o' });
-
-  // --- Two saves in flight at once -----------------------------------------
-  // Save closes the panel immediately, so a second save can start before the
-  // first read-modify-write finishes. Both edits have to survive.
-  boot = bootPlugin({ duckSettings: { provider: 'openrouter', keys: {} } });
+  boot.send({ type: 'save-settings', provider: 'google', key: 'AIza-new' });
   await settled();
-  boot.send({ type: 'save-settings', provider: 'openai', edits: { openai: 'sk-o' } });
-  boot.send({ type: 'save-settings', provider: 'google', edits: { google: 'AIza' } });
-  await settled(); await settled(); await settled(); await settled();
-  check('overlapping saves do not drop each other',
-    boot.state.duckSettings.keys, { openai: 'sk-o', google: 'AIza' });
-
-  check('a successful save is confirmed back to the UI',
-    boot.sent.filter((m) => m.type === 'settings' && m.saved).length, 2);
-
-  // --- Storage failures ----------------------------------------------------
-  // Migration wrote the credentials, then cleanup failed. That must not be
-  // reported as an empty install, or the next save would overwrite them.
-  boot = bootPlugin({ openrouterApiKey: 'sk-or-legacy', anthropicApiKey: 'sk-ant-legacy' }, { del: 'anthropicApiKey' });
-  await settled();
-  msg = boot.settings();
-  check('a cleanup failure still reports the migrated keys',
-    [msg.settings.keys.openrouter, msg.settings.keys.anthropic], ['sk-or-legacy', 'sk-ant-legacy']);
-  check('and is not flagged as a failed load', !!msg.failed, false);
-  check('the migrated credentials are on disk', boot.state.duckSettings.keys.anthropic, 'sk-ant-legacy');
-
-  // A read that genuinely fails is flagged, so the UI can say so.
-  boot = bootPlugin({ duckSettings: { provider: 'google', keys: { google: 'AIza' } } }, { get: 'duckSettings' });
-  await settled();
-  msg = boot.settings();
-  check('a failed read is flagged rather than passed off as empty',
-    [msg.failed, msg.settings.keys], [true, {}]);
-
-  // A save cannot merge if it cannot read. Refusing is the safe outcome: the
-  // stored credentials survive and the user is told, rather than a blind write
-  // replacing keys the UI never saw.
-  boot.send({ type: 'save-settings', provider: 'openai', edits: { openai: 'sk-o' } });
-  await settled();
-  check('a save that cannot read storage refuses instead of overwriting',
-    boot.state.duckSettings.keys, { google: 'AIza' });
-  check('and says so rather than failing silently', boot.notified.length, 1);
-  check('and tells the UI, so the edit can be retried',
-    boot.sent.filter((m) => m.type === 'save-failed').length, 1);
+  check('a save replaces the settings outright',
+    boot.state.duckSettings, { provider: 'google', key: 'AIza-new' });
 }
 
 run();
