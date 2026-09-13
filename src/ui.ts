@@ -1,21 +1,112 @@
 type Mood = 'stuck' | 'frustrated' | 'thinking' | 'fine';
 type ChatMsg = { role: 'user' | 'assistant'; content: string; error?: boolean };
 type Mode = 'idle' | 'settings' | 'checkin' | 'chat';
+type ProviderId = 'openrouter' | 'openai' | 'anthropic' | 'google';
 
-const MODEL = 'google/gemma-4-31b-it:free';
 const MAX_REPLY_TOKENS = 220;
-// Paste a tester key here and nobody has to set anything up. It ships inside the
-// plugin, so treat it as public and disposable: free models only, never a key
-// with credit on it, and don't commit one to a public repo.
+// Only meaningful for OpenRouter, whose free models cost nothing. Paste a key here
+// and testers need no setup. It ships inside the plugin, so treat it as public:
+// free models only, never a key with credit on it, and don't commit one.
 const SHARED_KEY = '';
+
+const DUCK_BRIEF =
+  "You are a small yellow rubber duck sitting on a FigJam board, keeping a designer company while they work. Warm, plain, brief, 2 to 4 sentences. Check in on how they are doing before problem solving. Ask one question at a time. Reference specific things from the board snapshot when it helps, otherwise ignore it. Never lecture, never sound like a corporate assistant.";
+
+type Provider = {
+  label: string;
+  model: string;
+  hint: string;
+  url: string;
+  headers: (key: string) => Record<string, string>;
+  body: (system: string, msgs: { role: string; content: string }[]) => any;
+  reply: (data: any) => string | undefined;
+};
+
+// Every one of these was checked against a live preflight: all four answer CORS
+// for a null origin, which is the origin a Figma plugin iframe sends.
+const PROVIDERS: Record<ProviderId, Provider> = {
+  openrouter: {
+    label: 'OpenRouter',
+    model: 'thinkingmachines/inkling:free',
+    hint: 'sk-or-v1-...  free, 20 req/min and 50/day per account',
+    url: 'https://openrouter.ai/api/v1/chat/completions',
+    headers: (key) => ({ 'Content-Type': 'application/json', Authorization: 'Bearer ' + key }),
+    body: (system, msgs) => openAiBody(PROVIDERS.openrouter.model, system, msgs),
+    reply: (d) => d && d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content,
+  },
+  openai: {
+    label: 'OpenAI',
+    model: 'gpt-5.6-luna',
+    hint: 'sk-...  paid, pay as you go',
+    url: 'https://api.openai.com/v1/chat/completions',
+    headers: (key) => ({ 'Content-Type': 'application/json', Authorization: 'Bearer ' + key }),
+    body: (system, msgs) => openAiBody(PROVIDERS.openai.model, system, msgs),
+    reply: (d) => d && d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content,
+  },
+  anthropic: {
+    label: 'Anthropic',
+    model: 'claude-haiku-4-5',
+    hint: 'sk-ant-...  paid, pay as you go',
+    url: 'https://api.anthropic.com/v1/messages',
+    headers: (key) => ({
+      'Content-Type': 'application/json',
+      'x-api-key': key,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    }),
+    body: (system, msgs) => ({
+      model: PROVIDERS.anthropic.model,
+      max_tokens: MAX_REPLY_TOKENS,
+      system,
+      messages: msgs,
+    }),
+    reply: (d) => d && d.content && d.content[0] && d.content[0].text,
+  },
+  google: {
+    label: 'Google AI Studio',
+    model: 'gemini-3.8-flash',
+    hint: 'AIza...  free tier available',
+    url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent',
+    headers: (key) => ({ 'Content-Type': 'application/json', 'x-goog-api-key': key }),
+    body: (system, msgs) => ({
+      systemInstruction: { parts: [{ text: system }] },
+      contents: msgs.map((m) => ({
+        role: m.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: m.content }],
+      })),
+      generationConfig: { maxOutputTokens: MAX_REPLY_TOKENS },
+    }),
+    reply: (d) =>
+      d && d.candidates && d.candidates[0] && d.candidates[0].content &&
+      d.candidates[0].content.parts && d.candidates[0].content.parts[0] &&
+      d.candidates[0].content.parts[0].text,
+  },
+};
+
+function openAiBody(model: string, system: string, msgs: { role: string; content: string }[]) {
+  return {
+    model,
+    max_completion_tokens: MAX_REPLY_TOKENS,
+    messages: [{ role: 'system', content: system }].concat(msgs),
+  };
+}
+
+const PROVIDER_IDS: ProviderId[] = ['openrouter', 'openai', 'anthropic', 'google'];
 
 const root = document.getElementById('root')!;
 let mode: Mode = 'idle';
-let apiKey: string | null = null;
+let provider: ProviderId = 'openrouter';
+let keys: { [k: string]: string } = {};
 let messages: ChatMsg[] = [];
 let loading = false;
 let boardItems: string[] = [];
 let boardReadAt = 0;
+
+function activeKey(): string {
+  const stored = (keys[provider] || '').trim();
+  if (stored) return stored;
+  return provider === 'openrouter' ? SHARED_KEY.trim() : '';
+}
 
 const moodOpeners: Record<Mood, string> = {
   stuck: "I'm feeling stuck.",
@@ -101,13 +192,23 @@ function duckSvg(size: number) {
   );
 }
 
+function header(sub: string) {
+  return (
+    '<div class="hdr">' + duckSvg(20) +
+    '<span class="hdr-title">Duck Check-In</span>' +
+    '<span class="hdr-sub">' + escapeHtml(sub) + '</span>' +
+    '</div>'
+  );
+}
+
 function idleDuck() {
   mode = 'idle';
   render(
-    '<div style="display:flex; flex-direction:column; align-items:flex-end; gap:6px;">' +
-    '<div id="duck" style="cursor:pointer; animation:bob 2.4s ease-in-out infinite;" title="Talk to the duck">' + duckSvg(56) + '</div>' +
-    '<button id="settings" style="border:none; background:none; color:#B08900; font-size:11px; cursor:pointer; padding:0;">settings</button>' +
-    '</div>'
+    '<div class="screen"><div class="idle">' +
+    '<div id="duck" class="idle-duck" title="Talk to the duck">' + duckSvg(72) + '</div>' +
+    '<div class="muted">Working away. I\'ll say hi if the board goes quiet.</div>' +
+    '<button id="settings" class="ghost">Settings</button>' +
+    '</div></div>'
   );
   document.getElementById('duck')!.onclick = () => {
     post({ type: 'get-board' });
@@ -118,43 +219,71 @@ function idleDuck() {
 
 function showSettings() {
   mode = 'settings';
+  const p = PROVIDERS[provider];
+  const options = PROVIDER_IDS.map(
+    (id) =>
+      '<option value="' + id + '"' + (id === provider ? ' selected' : '') + '>' +
+      escapeHtml(PROVIDERS[id].label) + (keys[id] ? ' (key saved)' : '') +
+      '</option>'
+  ).join('');
   render(
-    '<div class="panel">' +
-    '<div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">' + duckSvg(28) + '<p class="msg" style="margin:0;">Add your OpenRouter API key so I can actually talk back.</p></div>' +
-    '<input id="key-input" type="text" spellcheck="false" placeholder="sk-or-v1-..." value="' + escapeAttr(apiKey || '') + '" style="width:100%; box-sizing:border-box; padding:6px; border-radius:8px; border:1px solid #ddd; font-size:12px; margin-bottom:8px;" />' +
-    '<div class="actions">' +
-    '<button id="save-key">Save</button>' +
-    (apiKey ? '<button id="clear-key">Remove key</button>' : '') +
-    '<button id="back">Back</button>' +
+    '<div class="screen">' + header('settings') +
+    '<div class="body">' +
+    '<div><label for="provider">Provider</label>' +
+    '<select id="provider">' + options + '</select></div>' +
+    '<div><label for="key-input">API key</label>' +
+    '<input id="key-input" type="text" spellcheck="false" autocomplete="off" placeholder="' + escapeAttr(p.hint) + '" value="' + escapeAttr(keys[provider] || '') + '" /></div>' +
+    '<div class="muted tiny">Model: ' + escapeHtml(p.model) + '</div>' +
+    '<div class="muted tiny">Keys are stored on this device only. In live mode your board text and messages go to ' + escapeHtml(p.label) + ' and nowhere else. Without a key I still read the board, but replies are canned templates rather than a conversation.</div>' +
     '</div>' +
-    '<p style="font-size:10px; color:#999; margin-top:8px;">Stored locally on this device. Board text and your messages get sent to openrouter.ai when you chat. Without a key I still read the board, but my replies are canned templates, not a conversation.</p>' +
-    '</div>'
+    '<div class="ftr">' +
+    '<button id="save" class="primary">Save</button>' +
+    '<div class="row">' +
+    (keys[provider] ? '<button id="clear">Remove key</button>' : '') +
+    '<button id="back" class="ghost">Back</button>' +
+    '</div></div></div>'
   );
-  document.getElementById('save-key')!.onclick = () => {
+  const select = document.getElementById('provider') as HTMLSelectElement;
+  select.onchange = () => {
+    keys[provider] = (document.getElementById('key-input') as HTMLInputElement).value.trim();
+    if (!keys[provider]) delete keys[provider];
+    provider = select.value as ProviderId;
+    showSettings();
+  };
+  document.getElementById('save')!.onclick = () => {
     const val = (document.getElementById('key-input') as HTMLInputElement).value.trim();
-    if (val) post({ type: 'save-key', key: val });
+    if (val) keys[provider] = val;
+    else delete keys[provider];
+    post({ type: 'save-settings', settings: { provider, keys } });
     idleDuck();
   };
-  const clearBtn = document.getElementById('clear-key');
-  if (clearBtn) clearBtn.onclick = () => { post({ type: 'clear-key' }); idleDuck(); };
+  const clear = document.getElementById('clear');
+  if (clear) clear.onclick = () => {
+    delete keys[provider];
+    post({ type: 'save-settings', settings: { provider, keys } });
+    showSettings();
+  };
   document.getElementById('back')!.onclick = idleDuck;
 }
 
 function showCheckIn() {
   mode = 'checkin';
+  const moods: [Mood, string][] = [
+    ['stuck', 'Stuck'],
+    ['frustrated', 'Frustrated'],
+    ['thinking', 'Thinking'],
+    ['fine', 'Fine, just slow'],
+  ];
   render(
-    '<div class="panel">' +
-    '<div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">' + duckSvg(32) + '<p class="msg" style="margin:0;">Hey. Board\'s been quiet a bit. How are you doing?</p></div>' +
-    '<div class="moods">' +
-    '<button data-m="stuck">Stuck</button>' +
-    '<button data-m="frustrated">Frustrated</button>' +
-    '<button data-m="thinking">Thinking</button>' +
-    '<button data-m="fine">Fine, just slow</button>' +
+    '<div class="screen">' + header('') +
+    '<div class="body">' +
+    '<div class="turn"><div class="bubble them">Hey. Board\'s been quiet a bit. How are you doing?</div></div>' +
+    moods.map((m) => '<button data-m="' + m[0] + '">' + m[1] + '</button>').join('') +
     '</div>' +
-    '<button class="dismiss" id="dismiss">Not now</button>' +
+    '<div class="ftr"><button id="dismiss" class="ghost">Not now</button></div>' +
     '</div>'
   );
-  document.querySelectorAll<HTMLButtonElement>('.moods button').forEach((b) => {
+  document.querySelectorAll<HTMLButtonElement>('.body button').forEach((b) => {
     b.onclick = () => startChat(b.dataset.m as Mood);
   });
   document.getElementById('dismiss')!.onclick = () => {
@@ -189,10 +318,10 @@ function fallbackReply(first = false): string {
 
 async function sendUserText(userText: string, first = false) {
   messages.push({ role: 'user', content: userText });
-  loading = !!apiKey;
+  loading = !!activeKey();
   renderChat();
   await requestBoard();
-  if (apiKey) {
+  if (activeKey()) {
     await askDuck();
     loading = false;
   } else {
@@ -201,46 +330,60 @@ async function sendUserText(userText: string, first = false) {
   renderChat();
 }
 
-// Error bubbles are shown to the user but never sent back as model context.
+// Error bubbles never go back to the model. Consecutive same-role turns are
+// merged because Anthropic and Google both require the roles to alternate.
 function apiMessages() {
-  return messages.filter((m) => !m.error).map((m) => ({ role: m.role, content: m.content }));
+  const out: { role: string; content: string }[] = [];
+  for (const m of messages) {
+    if (m.error) continue;
+    const last = out[out.length - 1];
+    if (last && last.role === m.role) last.content += '\n\n' + m.content;
+    else out.push({ role: m.role, content: m.content });
+  }
+  return out;
 }
 
 function apiErrorMessage(status: number, detail: string): string {
+  const who = PROVIDERS[provider].label;
   const tail = detail ? ' (' + detail + ')' : '';
-  if (status === 401) return 'OpenRouter rejected that key. Check it in settings' + tail + '.';
+  if (status === 400 && provider === 'google') return who + ' rejected that key or request' + tail + '.';
+  if (status === 401) return who + ' rejected that key. Check it in settings' + tail + '.';
   if (status === 402) return 'That key has no credit left for this model' + tail + '.';
   if (status === 403) return "That key isn't allowed to use this model" + tail + '.';
-  if (status === 404) return 'OpenRouter does not know the model ' + MODEL + tail + '.';
-  if (status === 429) return "Too many requests. The free tier allows 20 a minute and 50 a day, shared by everyone using this key" + tail + '.';
-  if (status >= 500) return "OpenRouter's server errored (" + status + '). Try again in a moment.';
-  return 'The API refused that request (' + status + ')' + tail + '.';
+  if (status === 404) return who + ' does not know the model ' + PROVIDERS[provider].model + tail + '.';
+  if (status === 429) {
+    return provider === 'openrouter'
+      ? 'Too many requests. Free models allow 20 a minute and 50 a day, shared by everyone using this key' + tail + '.'
+      : 'Rate limited, or the account is out of credit. Give it a minute' + tail + '.';
+  }
+  if (status >= 500) return who + "'s server errored (" + status + '). Try again in a moment.';
+  return who + ' refused that request (' + status + ')' + tail + '.';
+}
+
+// Each provider names its stop reason differently; this covers all four.
+function emptyReason(data: any): string {
+  const c = data && data.choices && data.choices[0];
+  const g = data && data.candidates && data.candidates[0];
+  const stop = (c && c.finish_reason) || (g && g.finishReason) || (data && data.stop_reason);
+  if (stop === 'content_filter' || stop === 'SAFETY') return 'That one got caught by the content filter.';
+  if (stop === 'length' || stop === 'max_tokens' || stop === 'MAX_TOKENS') {
+    return 'That reply hit the length cap before any of it came out.';
+  }
+  return 'The API answered, but with nothing in it. Try again?';
 }
 
 async function askDuck() {
+  const p = PROVIDERS[provider];
   try {
-    const boardNote = boardItems.length
-      ? '\n\nHere is a snapshot of text currently on the board, in no particular order:\n- ' + boardItems.join('\n- ')
-      : '\n\nThe board looks empty right now, or has nothing with text on it.';
-    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    const system =
+      DUCK_BRIEF +
+      (boardItems.length
+        ? '\n\nHere is a snapshot of text currently on the board, in no particular order:\n- ' + boardItems.join('\n- ')
+        : '\n\nThe board looks empty right now, or has nothing with text on it.');
+    const res = await fetch(p.url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: 'Bearer ' + (apiKey || ''),
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        max_completion_tokens: MAX_REPLY_TOKENS,
-        messages: [
-          {
-            role: 'system',
-            content:
-              "You are a small yellow rubber duck sitting on a FigJam board, keeping a designer company while they work. Warm, plain, brief, 2 to 4 sentences. Check in on how they are doing before problem solving. Ask one question at a time. Reference specific things from the board snapshot when it helps, otherwise ignore it. Never lecture, never sound like a corporate assistant." +
-              boardNote,
-          },
-          ...apiMessages(),
-        ],
-      }),
+      headers: p.headers(activeKey()),
+      body: JSON.stringify(p.body(system, apiMessages())),
     });
     const data = await res.json().catch(() => null);
     if (!res.ok) {
@@ -248,68 +391,58 @@ async function askDuck() {
       messages.push({ role: 'assistant', content: apiErrorMessage(res.status, detail), error: true });
       return;
     }
-    const choice = data && data.choices && data.choices[0];
-    const text = choice && choice.message && choice.message.content;
+    const text = p.reply(data);
     if (!text) {
-      const why =
-        choice && choice.finish_reason === 'content_filter'
-          ? 'That one got caught by the content filter.'
-          : choice && choice.finish_reason === 'length'
-          ? 'That reply hit the length cap before any of it came out.'
-          : 'The API answered, but with nothing in it. Try again?';
-      messages.push({ role: 'assistant', content: why, error: true });
+      messages.push({ role: 'assistant', content: emptyReason(data), error: true });
       return;
     }
     messages.push({ role: 'assistant', content: text });
   } catch (e) {
     messages.push({
       role: 'assistant',
-      content: "Couldn't reach openrouter.ai. Check your connection, then try again.",
+      content: "Couldn't reach " + p.label + '. Check your connection, then try again.',
       error: true,
     });
   }
 }
 
 function boardLine(): string {
-  const age = boardReadAt ? Math.round((Date.now() - boardReadAt) / 1000) : 0;
   if (!boardReadAt) return 'Board not read yet.';
   if (!boardItems.length) return 'Nothing with text on the board right now.';
-  return 'Reading ' + boardItems.length + (boardItems.length === 1 ? ' item' : ' items') + ' off the board' + (age > 5 ? ', ' + age + 's ago' : '') + '.';
+  return 'Reading ' + boardItems.length + (boardItems.length === 1 ? ' item' : ' items') + ' off the board.';
 }
 
 function renderChat() {
   mode = 'chat';
-  let bubbles = '';
+  let turns = '';
   messages.forEach((m) => {
-    const isUser = m.role === 'user';
-    const bg = m.error ? '#FDECEC' : isUser ? '#FFEFC2' : '#F7F7F7';
-    const color = m.error ? '#A33' : '#333';
-    bubbles +=
-      '<div style="display:flex; ' + (isUser ? 'justify-content:flex-end;' : 'justify-content:flex-start; gap:6px;') + ' margin-bottom:6px;">' +
-      (isUser || m.error ? '' : duckSvg(20)) +
-      '<div style="max-width:75%; background:' + bg + '; color:' + color + '; border-radius:10px; padding:6px 9px; font-size:12px; line-height:1.4;">' + escapeHtml(m.content) + '</div>' +
-      '</div>';
+    const mine = m.role === 'user';
+    const cls = m.error ? 'err' : mine ? 'mine' : 'them';
+    turns +=
+      '<div class="turn' + (mine ? ' mine' : '') + '">' +
+      (mine || m.error ? '' : duckSvg(16)) +
+      '<div class="bubble ' + cls + '">' + escapeHtml(m.content) + '</div></div>';
   });
   if (loading) {
-    bubbles += '<div style="display:flex; gap:6px; align-items:center;">' + duckSvg(20) + '<span style="font-size:11px; color:#999;">thinking...</span></div>';
+    turns += '<div class="turn">' + duckSvg(16) + '<div class="bubble them muted">thinking...</div></div>';
   }
   const droppable = [...messages].reverse().find((m) => m.role === 'assistant' && !m.error);
-  const keyNote = apiKey
-    ? ''
-    : '<p style="font-size:10px; color:#B08900; margin:0 0 6px; line-height:1.3;">No API key, so these are canned prompts rather than a real conversation. Add a key in settings.</p>';
   render(
-    '<div class="panel" style="display:flex; flex-direction:column; max-height:340px;">' +
-    keyNote +
-    '<div id="thread" style="overflow-y:auto; flex:1; margin-bottom:8px;">' + bubbles + '</div>' +
-    '<textarea id="answer" rows="2" placeholder="Type here..." style="width:100%; box-sizing:border-box; margin-bottom:6px;"></textarea>' +
-    '<div class="actions">' +
-    '<button id="send"' + (loading ? ' disabled style="opacity:0.5; cursor:default;"' : '') + '>Send</button>' +
-    '<button id="refresh">Look at the board again</button>' +
-    (droppable ? '<button id="drop">Drop last reply on board</button>' : '') +
-    '<button id="done">I\'m good, thanks</button>' +
+    '<div class="screen">' +
+    header(activeKey() ? PROVIDERS[provider].label : 'no key, canned replies') +
+    '<div class="body" id="thread">' + turns + '</div>' +
+    '<div class="ftr">' +
+    '<textarea id="answer" rows="2" placeholder="Type here..."></textarea>' +
+    '<div class="row">' +
+    '<button id="send" class="primary"' + (loading ? ' disabled' : '') + '>Send</button>' +
+    '<button id="refresh">Re-read board</button>' +
     '</div>' +
-    '<p style="font-size:10px; color:#999; margin:6px 0 0;">' + escapeHtml(boardLine()) + '</p>' +
-    '</div>'
+    '<div class="row">' +
+    (droppable ? '<button id="drop">Drop last reply on board</button>' : '') +
+    '<button id="done" class="ghost">I\'m good, thanks</button>' +
+    '</div>' +
+    '<div class="muted tiny">' + escapeHtml(boardLine()) + '</div>' +
+    '</div></div>'
   );
   const thread = document.getElementById('thread')!;
   thread.scrollTop = thread.scrollHeight;
@@ -367,7 +500,10 @@ window.onmessage = (event) => {
   }
   // Back to work: stand down only if the duck is still just asking.
   if (msg.type === 'resume' && mode === 'checkin') idleDuck();
-  if (msg.type === 'api-key') apiKey = msg.key || SHARED_KEY || null;
+  if (msg.type === 'settings' && msg.settings) {
+    if (PROVIDERS[msg.settings.provider as ProviderId]) provider = msg.settings.provider;
+    keys = msg.settings.keys || {};
+  }
 };
 
 idleDuck();
