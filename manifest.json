@@ -6,7 +6,7 @@
   "ui": "dist/ui.html",
   "editorType": ["figjam"],
   "networkAccess": {
-    "allowedDomains": ["https://api.anthropic.com"],
-    "reasoning": "Calls the Anthropic API so the duck can hold a live conversation, using the user's own API key."
+    "allowedDomains": ["https://openrouter.ai"],
+    "reasoning": "Calls the OpenRouter API so the duck can hold a live conversation, using the user's own API key."
   }
 }
