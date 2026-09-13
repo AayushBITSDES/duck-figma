@@ -86,7 +86,8 @@ function newUiInstance() { return new Function(uiSrc + `; return {
   set boardItems(v){boardItems=v},
   get provider(){return provider}, set provider(v){provider=v},
   get keys(){return keys}, set keys(v){keys=v},
-  get draftProvider(){return draftProvider},
+  get draftProvider(){return draftProvider}, get mode(){return mode},
+  get saving(){return saving}, get loading(){return loading}, sendUserText,
   set fallbackTurn(v){fallbackTurn=v}, set fallbackItemCursor(v){fallbackItemCursor=v},
   PROVIDERS, activeKey, askDuck, apiMessages, apiErrorMessage, emptyReason,
   fallbackReply, openSettings, idleDuck };`)(); }
@@ -221,10 +222,16 @@ async function run() {
     [1, 'google', { google: 'AIza-new' }, false]);
   check('Save does not advance local state before code.ts confirms',
     [ui.provider, ui.keys.google], ['openrouter', undefined]);
+  check('Save waits on the settings screen with the form locked',
+    [ui.mode, ui.saving], ['settings', true]);
+  const lockedHtml = el('root').innerHTML;
+  check('and offers no way to fire a second save while the first is pending',
+    [lockedHtml.indexOf('Saving...') > -1, typeof el('save').onclick], [true, 'object']);
 
   ui.deliver({ type: 'settings', saved: true, settings: { provider: 'google', keys: { openrouter: 'sk-or-keep', anthropic: 'sk-ant-keep', google: 'AIza-new' } } });
   check('the confirmation is what moves the live provider and keys',
     [ui.provider, ui.keys.google, ui.keys.openrouter], ['google', 'AIza-new', 'sk-or-keep']);
+  check('and closes the settings screen', [ui.mode, ui.saving], ['idle', false]);
 
   // --- Settings opened before startup finishes ------------------------------
   // code.ts needs several storage round-trips before it can send the saved
@@ -246,27 +253,48 @@ async function run() {
     posted.filter((m) => m.type === 'save-settings').pop().edits, { anthropic: 'sk-ant-edited' });
 
   // --- A save that failed must stay retryable -------------------------------
+  // The draft never leaves the screen, so a retry resends exactly what the user
+  // had, provider included, with no pending-edit bookkeeping to get out of sync.
   const retry = makeUi();
   retry.deliver({ type: 'settings', settings: { provider: 'openrouter', keys: { openrouter: 'sk-or-saved' } } });
   retry.openSettings();
-  el('key-input').value = 'sk-or-new';
+  el('provider').value = 'google';
+  el('provider').onchange();
+  el('key-input').value = 'AIza-new';
   el('save').onclick();
   retry.deliver({ type: 'save-failed' });
-  check('a failed save leaves the confirmed key untouched', retry.keys.openrouter, 'sk-or-saved');
+  check('a failed save leaves the confirmed keys untouched',
+    [retry.keys.openrouter, retry.keys.google], ['sk-or-saved', undefined]);
+  check('and unlocks the form rather than closing it', [retry.mode, retry.saving], ['settings', false]);
+  check('with what the user typed still in place', el('key-input').value, 'AIza-new');
+  check('and the provider they picked still selected', el('provider').value, 'google');
 
-  retry.openSettings();
-  check('reopening settings still shows what the user typed', el('key-input').value, 'sk-or-new');
   posted.length = 0;
   el('save').onclick();
-  check('and pressing Save sends the edit again rather than nothing',
-    posted.filter((m) => m.type === 'save-settings').pop().edits, { openrouter: 'sk-or-new' });
+  const resent = posted.filter((m) => m.type === 'save-settings').pop();
+  check('pressing Save again resends the whole change, provider included',
+    [resent.provider, resent.edits], ['google', { google: 'AIza-new' }]);
 
-  retry.deliver({ type: 'settings', saved: true, settings: { provider: 'openrouter', keys: { openrouter: 'sk-or-new' } } });
+  retry.deliver({ type: 'settings', saved: true, settings: { provider: 'google', keys: { openrouter: 'sk-or-saved', google: 'AIza-new' } } });
   retry.openSettings();
   posted.length = 0;
   el('save').onclick();
   check('once confirmed, a further Save sends nothing to redo',
     posted.filter((m) => m.type === 'save-settings').pop().edits, {});
+
+  // --- Losing the key mid-send must not wedge the chat ----------------------
+  const wedge = makeUi();
+  wedge.deliver({ type: 'settings', settings: { provider: 'openrouter', keys: { openrouter: 'sk-or' } } });
+  wedge.messages = [];
+  const inflight = wedge.sendUserText('are you there');
+  check('the panel shows thinking while a reply is expected', wedge.loading, true);
+  // The key is removed while the board request is still outstanding.
+  wedge.deliver({ type: 'settings', saved: true, settings: { provider: 'openrouter', keys: {} } });
+  wedge.deliver({ type: 'board-context', board: [] });
+  await inflight;
+  check('losing the key mid-send falls back instead of hanging on thinking',
+    [wedge.loading, wedge.messages.length], [false, 2]);
+
 
   // Storage failure still has to unblock the screen.
   const broken = makeUi();

@@ -110,12 +110,12 @@ let draftKeys: { [k: string]: string } = {};
 // map, and saving it would wipe every other provider's key.
 let settingsLoaded = false;
 let settingsFailed = false;
-// `keys` mirrors what code.ts has confirmed is in storage, and nothing else
-// advances it. Edits that have been sent but not confirmed live here until
-// code.ts says they landed, so a failed save can be retried rather than being
-// silently adopted as the new baseline.
+// `keys` mirrors what code.ts has confirmed is in storage, and only a
+// confirmation advances it. Save stays on this screen until that confirmation
+// arrives, so there is never unconfirmed state sitting behind the user's back:
+// the draft on screen is the only copy of what they are trying to save.
 let seededKeys: { [k: string]: string } = {};
-let pendingEdits: { [k: string]: string | null } = {};
+let saving = false;
 
 function activeKey(): string {
   const stored = (keys[provider] || '').trim();
@@ -242,17 +242,8 @@ function openSettings() {
     );
     return;
   }
-  // Draft shows the user's intent (confirmed keys plus anything still pending),
-  // while the baseline stays the confirmed truth, so an unsaved edit still
-  // reads as a difference and gets resent.
-  const draft = Object.assign({}, keys);
-  for (const id of Object.keys(pendingEdits)) {
-    const value = pendingEdits[id];
-    if (value) draft[id] = value;
-    else delete draft[id];
-  }
   draftProvider = provider;
-  draftKeys = draft;
+  draftKeys = Object.assign({}, keys);
   seededKeys = Object.assign({}, keys);
   showSettings();
 }
@@ -292,9 +283,9 @@ function showSettings() {
     '<div class="screen">' + header('settings') +
     '<div class="body">' +
     '<div><label for="provider">Provider</label>' +
-    '<select id="provider">' + options + '</select></div>' +
+    '<select id="provider"' + (saving ? ' disabled' : '') + '>' + options + '</select></div>' +
     '<div><label for="key-input">API key</label>' +
-    '<input id="key-input" type="text" spellcheck="false" autocomplete="off" placeholder="' + escapeAttr(p.hint) + '" value="' + escapeAttr(draftKeys[draftProvider] || '') + '" /></div>' +
+    '<input id="key-input" type="text" spellcheck="false" autocomplete="off"' + (saving ? ' disabled' : '') + ' placeholder="' + escapeAttr(p.hint) + '" value="' + escapeAttr(draftKeys[draftProvider] || '') + '" /></div>' +
     (settingsFailed
       ? '<div class="bubble err">Couldn\'t reach your saved settings. What you type here is kept and will be sent again when you press Save.</div>'
       : '') +
@@ -302,25 +293,26 @@ function showSettings() {
     '<div class="muted tiny">Keys are stored on this device only. In live mode your board text and messages go to ' + escapeHtml(p.label) + ' and nowhere else. Without a key I still read the board, but replies are canned templates rather than a conversation.</div>' +
     '</div>' +
     '<div class="ftr">' +
-    '<button id="save" class="primary">Save</button>' +
+    '<button id="save" class="primary"' + (saving ? ' disabled' : '') + '>' + (saving ? 'Saving...' : 'Save') + '</button>' +
     '<div class="row">' +
-    (draftKeys[draftProvider] ? '<button id="clear">Remove key</button>' : '') +
-    '<button id="back" class="ghost">Back</button>' +
+    (draftKeys[draftProvider] && !saving ? '<button id="clear">Remove key</button>' : '') +
+    (saving ? '' : '<button id="back" class="ghost">Back</button>') +
     '</div></div></div>'
   );
   const select = document.getElementById('provider') as HTMLSelectElement;
+  if (saving) return;
   select.onchange = () => {
     stashDraftKey();
     draftProvider = select.value as ProviderId;
     showSettings();
   };
   document.getElementById('save')!.onclick = () => {
+    if (saving) return;
     stashDraftKey();
-    const edits = draftEdits();
-    // Not applied locally: code.ts confirms what actually landed.
-    pendingEdits = Object.assign({}, pendingEdits, edits);
-    post({ type: 'save-settings', provider: draftProvider, edits: edits });
-    idleDuck();
+    saving = true;
+    settingsFailed = false;
+    post({ type: 'save-settings', provider: draftProvider, edits: draftEdits() });
+    showSettings();
   };
   const clear = document.getElementById('clear');
   if (clear) clear.onclick = () => {
@@ -328,6 +320,13 @@ function showSettings() {
     showSettings();
   };
   document.getElementById('back')!.onclick = idleDuck;
+}
+
+// The draft is untouched, so unlocking the form is enough for a retry.
+function saveFailed() {
+  saving = false;
+  settingsFailed = true;
+  if (mode === 'settings') showSettings();
 }
 
 function showCheckIn() {
@@ -387,10 +386,12 @@ async function sendUserText(userText: string, first = false) {
   await requestBoard();
   if (activeKey()) {
     await askDuck();
-    loading = false;
   } else {
     messages.push({ role: 'assistant', content: fallbackReply(first) });
   }
+  // Unconditional: the key can disappear while the board request is in flight,
+  // and the fallback branch used to leave this stuck on.
+  loading = false;
   renderChat();
 }
 
@@ -562,20 +563,24 @@ window.onmessage = (event) => {
   }
   // Back to work: stand down only if the duck is still just asking.
   if (msg.type === 'resume' && mode === 'checkin') idleDuck();
-  // The edits stay in pendingEdits, so reopening settings shows them and
-  // pressing Save sends them again.
-  if (msg.type === 'save-failed') settingsFailed = true;
+  // Pressing Save resends the draft as-is, selected provider included.
+  if (msg.type === 'save-failed') saveFailed();
   if (msg.type === 'settings') {
     const settings = msg.settings || {};
     if (PROVIDERS[settings.provider as ProviderId]) provider = settings.provider;
     keys = settings.keys || {};
     settingsLoaded = true;
     settingsFailed = !!msg.failed;
-    // Drop only the pending edits this message actually reflects; another save
-    // may still be in flight behind it.
-    for (const id of Object.keys(pendingEdits)) {
-      const wanted = pendingEdits[id] || '';
-      if ((keys[id] || '') === wanted) delete pendingEdits[id];
+    if (mode === 'settings') {
+      // Either this is the save we were waiting on, or it is the startup load
+      // releasing the wait screen. Nothing else sends this message, so it can
+      // never land on a draft the user is midway through typing.
+      if (saving) {
+        saving = false;
+        idleDuck();
+      } else {
+        openSettings();
+      }
     }
     // Re-seed a settings screen that was opened before this arrived.
     if (mode === 'settings') openSettings();

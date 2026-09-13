@@ -53,7 +53,8 @@ That compiles `src/` and asserts against the compiled output: each provider's UR
 - Keys saved by older builds (`openrouterApiKey`, `openaiApiKey`, `anthropicApiKey`) are migrated into the current settings on load, and only deleted once the migration has been written.
 - `code.ts` owns the stored settings. Saving sends only the entries the user changed; `code.ts` merges them onto whatever is actually in storage and reports back what landed. The UI never advances its own copy on its own say-so, so a settings screen working from a stale or failed read cannot wipe a key it never saw.
 - Saves are serialised, because read-modify-write is not atomic and two in flight would otherwise merge onto the same snapshot.
-- A save that cannot read storage is refused, not written blind, and the edit is kept so pressing Save again retries it.
+- A save that cannot read storage is refused, not written blind.
+- Save stays on the settings screen with the form locked until `code.ts` confirms the write. A failure unlocks the form with the draft exactly as the user left it, so pressing Save again retries the whole change including the selected provider. There is no unconfirmed state held behind the user's back.
 - Board snapshot caps at 40 items, 200 characters each. It is re-read before every reply, and the panel footer shows how many items the duck is working from.
 - All four providers answer CORS for a null origin, which is what a plugin iframe sends, so the plugin calls them directly with no proxy. Anthropic needs the `anthropic-dangerous-direct-browser-access` header; the others need nothing special.
 - API failures are shown as what they are (rejected key, rate limit, no network) instead of the duck pretending it lost its train of thought. Failed turns are kept out of the history sent to the model, and same-role turns are merged because Anthropic and Google require roles to alternate.
