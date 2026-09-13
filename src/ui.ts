@@ -101,6 +101,10 @@ let messages: ChatMsg[] = [];
 let loading = false;
 let boardItems: string[] = [];
 let boardReadAt = 0;
+// Settings edits live here until Save, so Back discards them instead of
+// silently pointing the next conversation at a provider that was never saved.
+let draftProvider: ProviderId = 'openrouter';
+let draftKeys: { [k: string]: string } = {};
 
 function activeKey(): string {
   const stored = (keys[provider] || '').trim();
@@ -214,16 +218,31 @@ function idleDuck() {
     post({ type: 'get-board' });
     showCheckIn();
   };
-  document.getElementById('settings')!.onclick = showSettings;
+  document.getElementById('settings')!.onclick = openSettings;
+}
+
+function openSettings() {
+  draftProvider = provider;
+  draftKeys = Object.assign({}, keys);
+  showSettings();
+}
+
+// Reads whatever is in the key field into the draft before the screen redraws.
+function stashDraftKey() {
+  const input = document.getElementById('key-input') as HTMLInputElement | null;
+  if (!input) return;
+  const val = input.value.trim();
+  if (val) draftKeys[draftProvider] = val;
+  else delete draftKeys[draftProvider];
 }
 
 function showSettings() {
   mode = 'settings';
-  const p = PROVIDERS[provider];
+  const p = PROVIDERS[draftProvider];
   const options = PROVIDER_IDS.map(
     (id) =>
-      '<option value="' + id + '"' + (id === provider ? ' selected' : '') + '>' +
-      escapeHtml(PROVIDERS[id].label) + (keys[id] ? ' (key saved)' : '') +
+      '<option value="' + id + '"' + (id === draftProvider ? ' selected' : '') + '>' +
+      escapeHtml(PROVIDERS[id].label) + (draftKeys[id] ? ' (key saved)' : '') +
       '</option>'
   ).join('');
   render(
@@ -232,35 +251,33 @@ function showSettings() {
     '<div><label for="provider">Provider</label>' +
     '<select id="provider">' + options + '</select></div>' +
     '<div><label for="key-input">API key</label>' +
-    '<input id="key-input" type="text" spellcheck="false" autocomplete="off" placeholder="' + escapeAttr(p.hint) + '" value="' + escapeAttr(keys[provider] || '') + '" /></div>' +
+    '<input id="key-input" type="text" spellcheck="false" autocomplete="off" placeholder="' + escapeAttr(p.hint) + '" value="' + escapeAttr(draftKeys[draftProvider] || '') + '" /></div>' +
     '<div class="muted tiny">Model: ' + escapeHtml(p.model) + '</div>' +
     '<div class="muted tiny">Keys are stored on this device only. In live mode your board text and messages go to ' + escapeHtml(p.label) + ' and nowhere else. Without a key I still read the board, but replies are canned templates rather than a conversation.</div>' +
     '</div>' +
     '<div class="ftr">' +
     '<button id="save" class="primary">Save</button>' +
     '<div class="row">' +
-    (keys[provider] ? '<button id="clear">Remove key</button>' : '') +
+    (draftKeys[draftProvider] ? '<button id="clear">Remove key</button>' : '') +
     '<button id="back" class="ghost">Back</button>' +
     '</div></div></div>'
   );
   const select = document.getElementById('provider') as HTMLSelectElement;
   select.onchange = () => {
-    keys[provider] = (document.getElementById('key-input') as HTMLInputElement).value.trim();
-    if (!keys[provider]) delete keys[provider];
-    provider = select.value as ProviderId;
+    stashDraftKey();
+    draftProvider = select.value as ProviderId;
     showSettings();
   };
   document.getElementById('save')!.onclick = () => {
-    const val = (document.getElementById('key-input') as HTMLInputElement).value.trim();
-    if (val) keys[provider] = val;
-    else delete keys[provider];
+    stashDraftKey();
+    provider = draftProvider;
+    keys = Object.assign({}, draftKeys);
     post({ type: 'save-settings', settings: { provider, keys } });
     idleDuck();
   };
   const clear = document.getElementById('clear');
   if (clear) clear.onclick = () => {
-    delete keys[provider];
-    post({ type: 'save-settings', settings: { provider, keys } });
+    delete draftKeys[draftProvider];
     showSettings();
   };
   document.getElementById('back')!.onclick = idleDuck;

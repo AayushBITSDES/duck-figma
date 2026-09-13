@@ -5,6 +5,14 @@ const TICK_MS = 2 * 1000;
 const MAX_BOARD_ITEMS = 40;
 const MAX_ITEM_LENGTH = 200;
 const STORE = 'duckSettings';
+// Key names earlier builds used, before settings moved into one object. Each
+// names a provider the plugin still supports, so they are migrated rather than
+// dropped, and only deleted once the new settings have actually been written.
+const LEGACY_KEYS: [string, string][] = [
+  ['openrouterApiKey', 'openrouter'],
+  ['openaiApiKey', 'openai'],
+  ['anthropicApiKey', 'anthropic'],
+];
 
 let lastActivity = Date.now();
 let checkInActive = false;
@@ -107,15 +115,27 @@ setInterval(() => {
   }
 }, TICK_MS);
 
-figma.clientStorage.getAsync(STORE).then((settings) => {
-  figma.ui.postMessage({ type: 'settings', settings: settings || null });
-});
+async function loadSettings() {
+  const stored = (await figma.clientStorage.getAsync(STORE)) || {};
+  const keys: { [k: string]: string } = Object.assign({}, stored.keys || {});
+  let sawLegacy = false;
+  for (const entry of LEGACY_KEYS) {
+    const legacy = await figma.clientStorage.getAsync(entry[0]);
+    if (typeof legacy === 'string' && legacy.trim()) {
+      sawLegacy = true;
+      if (!keys[entry[1]]) keys[entry[1]] = legacy.trim();
+    }
+  }
+  const settings = { provider: stored.provider || 'openrouter', keys };
+  if (sawLegacy) {
+    await figma.clientStorage.setAsync(STORE, settings);
+    // Persisted, so the old entries are now safe to drop.
+    for (const entry of LEGACY_KEYS) await figma.clientStorage.deleteAsync(entry[0]);
+  }
+  figma.ui.postMessage({ type: 'settings', settings });
+}
 
-// Earlier builds stored keys under their own names. Don't leave stale secrets
-// sitting in clientStorage on machines that ran them.
-figma.clientStorage.deleteAsync('anthropicApiKey');
-figma.clientStorage.deleteAsync('openaiApiKey');
-figma.clientStorage.deleteAsync('openrouterApiKey');
+loadSettings();
 
 // Give the UI a board snapshot up front so the first reply is never board-blind.
 sendBoard();
