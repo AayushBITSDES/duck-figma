@@ -218,8 +218,11 @@ async function run() {
   check('Save applies the provider', ui.provider, 'google');
   check('Save applies the new key and keeps the others',
     [ui.keys.google, ui.keys.openrouter, ui.keys.anthropic], ['AIza-new', 'sk-or-keep', 'sk-ant-keep']);
+  const saved = posted.filter((m) => m.type === 'save-settings').pop();
   check('Save persists through one save-settings message',
     posted.filter((m) => m.type === 'save-settings').length, 1);
+  check('Save sends only what changed, never the whole key map',
+    [saved.provider, saved.edits, 'keys' in saved], ['google', { google: 'AIza-new' }, false]);
 
   // --- Settings opened before startup finishes ------------------------------
   // code.ts needs several storage round-trips before it can send the saved
@@ -239,9 +242,8 @@ async function run() {
   el('save').onclick();
   check('saving after a late load keeps the other provider keys',
     [early.keys.anthropic, early.keys.openrouter], ['sk-ant-edited', 'sk-or-saved']);
-  check('and persists both',
-    posted.filter((m) => m.type === 'save-settings').pop().settings.keys,
-    { openrouter: 'sk-or-saved', anthropic: 'sk-ant-edited' });
+  check('and sends only the edited provider',
+    posted.filter((m) => m.type === 'save-settings').pop().edits, { anthropic: 'sk-ant-edited' });
 
   // Storage failure still has to unblock the screen.
   const broken = makeUi();
@@ -259,31 +261,49 @@ async function run() {
 
 // Boots code.js against a stub Figma and checks the one-way door: upgrading
 // must not throw away keys saved by earlier builds under their old names.
-function bootPlugin(store) {
+function bootPlugin(store, failOn) {
   const state = Object.assign({}, store);
   const sent = [];
+  const notified = [];
+  const fail = failOn || {};
   const realSetInterval = global.setInterval;
   global.setInterval = () => 0;
   global.__html__ = '<html></html>';
   global.figma = {
     showUI: () => {},
     on: () => {},
-    notify: () => {},
+    notify: (t) => { notified.push(t); },
     currentPage: { findAll: () => [], selection: [] },
     viewport: { center: { x: 0, y: 0 } },
     activeUsers: [],
     ui: { postMessage: (m) => sent.push(m), onmessage: null },
     clientStorage: {
-      getAsync: async (k) => (k in state ? state[k] : undefined),
-      setAsync: async (k, v) => { state[k] = v; },
-      deleteAsync: async (k) => { delete state[k]; },
+      getAsync: async (k) => {
+        if (fail.get === k) throw new Error('storage unavailable');
+        return k in state ? state[k] : undefined;
+      },
+      setAsync: async (k, v) => {
+        if (fail.set === k) throw new Error('storage unavailable');
+        state[k] = v;
+      },
+      deleteAsync: async (k) => {
+        if (fail.del === k) throw new Error('storage unavailable');
+        delete state[k];
+      },
     },
     createSticky: () => ({ text: {}, remove: () => {} }),
     loadFontAsync: async () => {},
   };
+  const stub = global.figma;
   new Function(fs.readFileSync(path.join(BUILD, 'code.js'), 'utf8'))();
   global.setInterval = realSetInterval;
-  return { state: state, sent: sent };
+  return {
+    state: state,
+    sent: sent,
+    notified: notified,
+    send: (msg) => stub.ui.onmessage(msg),
+    settings: () => sent.filter((m) => m.type === 'settings').pop(),
+  };
 }
 
 const settled = () => new Promise((r) => setTimeout(r, 0));
@@ -320,6 +340,53 @@ async function runCodeTests() {
   msg = boot.sent.filter((m) => m.type === 'settings').pop();
   check('a fresh install starts on openrouter with no keys', [msg.settings.provider, msg.settings.keys], ['openrouter', {}]);
   check('a fresh install writes nothing to storage', Object.keys(boot.state).length, 0);
+
+  // --- Saving is a merge onto real storage, never a replace ----------------
+  boot = bootPlugin({ duckSettings: { provider: 'openrouter', keys: { openrouter: 'sk-or', anthropic: 'sk-ant', google: 'AIza' } } });
+  await settled();
+  boot.send({ type: 'save-settings', provider: 'google', edits: { google: 'AIza-new' } });
+  await settled();
+  check('an edit to one provider leaves the others alone',
+    boot.state.duckSettings.keys, { openrouter: 'sk-or', anthropic: 'sk-ant', google: 'AIza-new' });
+  check('and the selected provider is stored', boot.state.duckSettings.provider, 'google');
+
+  boot.send({ type: 'save-settings', provider: 'google', edits: { anthropic: null } });
+  await settled();
+  check('a null edit removes just that key',
+    boot.state.duckSettings.keys, { openrouter: 'sk-or', google: 'AIza-new' });
+
+  // A save from a UI that believes storage is empty must still not wipe it.
+  boot.send({ type: 'save-settings', provider: 'openai', edits: { openai: 'sk-o' } });
+  await settled();
+  check('a save from a UI with a stale view cannot wipe stored keys',
+    boot.state.duckSettings.keys, { openrouter: 'sk-or', google: 'AIza-new', openai: 'sk-o' });
+
+  // --- Storage failures ----------------------------------------------------
+  // Migration wrote the credentials, then cleanup failed. That must not be
+  // reported as an empty install, or the next save would overwrite them.
+  boot = bootPlugin({ openrouterApiKey: 'sk-or-legacy', anthropicApiKey: 'sk-ant-legacy' }, { del: 'anthropicApiKey' });
+  await settled();
+  msg = boot.settings();
+  check('a cleanup failure still reports the migrated keys',
+    [msg.settings.keys.openrouter, msg.settings.keys.anthropic], ['sk-or-legacy', 'sk-ant-legacy']);
+  check('and is not flagged as a failed load', !!msg.failed, false);
+  check('the migrated credentials are on disk', boot.state.duckSettings.keys.anthropic, 'sk-ant-legacy');
+
+  // A read that genuinely fails is flagged, so the UI can say so.
+  boot = bootPlugin({ duckSettings: { provider: 'google', keys: { google: 'AIza' } } }, { get: 'duckSettings' });
+  await settled();
+  msg = boot.settings();
+  check('a failed read is flagged rather than passed off as empty',
+    [msg.failed, msg.settings.keys], [true, {}]);
+
+  // A save cannot merge if it cannot read. Refusing is the safe outcome: the
+  // stored credentials survive and the user is told, rather than a blind write
+  // replacing keys the UI never saw.
+  boot.send({ type: 'save-settings', provider: 'openai', edits: { openai: 'sk-o' } });
+  await settled();
+  check('a save that cannot read storage refuses instead of overwriting',
+    boot.state.duckSettings.keys, { google: 'AIza' });
+  check('and says so rather than failing silently', boot.notified.length, 1);
 }
 
 run();

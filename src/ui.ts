@@ -109,6 +109,9 @@ let draftKeys: { [k: string]: string } = {};
 // saved settings. Until that lands, seeding a draft would snapshot an empty key
 // map, and saving it would wipe every other provider's key.
 let settingsLoaded = false;
+let settingsFailed = false;
+// What the open draft was seeded from, so Save can send just the difference.
+let seededKeys: { [k: string]: string } = {};
 
 function activeKey(): string {
   const stored = (keys[provider] || '').trim();
@@ -237,7 +240,21 @@ function openSettings() {
   }
   draftProvider = provider;
   draftKeys = Object.assign({}, keys);
+  seededKeys = Object.assign({}, keys);
   showSettings();
+}
+
+// Only the entries the user actually changed. null means remove. code.ts merges
+// these onto real storage, so a draft seeded from a stale or failed read can
+// never wipe a provider the user never touched.
+function draftEdits(): { [k: string]: string | null } {
+  const edits: { [k: string]: string | null } = {};
+  for (const id of PROVIDER_IDS) {
+    const before = seededKeys[id] || '';
+    const after = draftKeys[id] || '';
+    if (before !== after) edits[id] = after || null;
+  }
+  return edits;
 }
 
 // Reads whatever is in the key field into the draft before the screen redraws.
@@ -265,6 +282,9 @@ function showSettings() {
     '<select id="provider">' + options + '</select></div>' +
     '<div><label for="key-input">API key</label>' +
     '<input id="key-input" type="text" spellcheck="false" autocomplete="off" placeholder="' + escapeAttr(p.hint) + '" value="' + escapeAttr(draftKeys[draftProvider] || '') + '" /></div>' +
+    (settingsFailed
+      ? '<div class="bubble err">Couldn\'t read your saved settings. Anything you change here is still saved on its own, but other providers\' keys may not be shown.</div>'
+      : '') +
     '<div class="muted tiny">Model: ' + escapeHtml(p.model) + '</div>' +
     '<div class="muted tiny">Keys are stored on this device only. In live mode your board text and messages go to ' + escapeHtml(p.label) + ' and nowhere else. Without a key I still read the board, but replies are canned templates rather than a conversation.</div>' +
     '</div>' +
@@ -285,7 +305,7 @@ function showSettings() {
     stashDraftKey();
     provider = draftProvider;
     keys = Object.assign({}, draftKeys);
-    post({ type: 'save-settings', settings: { provider, keys } });
+    post({ type: 'save-settings', provider: provider, edits: draftEdits() });
     idleDuck();
   };
   const clear = document.getElementById('clear');
@@ -535,6 +555,7 @@ window.onmessage = (event) => {
     if (PROVIDERS[settings.provider as ProviderId]) provider = settings.provider;
     keys = settings.keys || {};
     settingsLoaded = true;
+    settingsFailed = !!msg.failed;
     // Re-seed a settings screen that was opened before this arrived.
     if (mode === 'settings') openSettings();
   }

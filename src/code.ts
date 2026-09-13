@@ -116,13 +116,17 @@ setInterval(() => {
 }, TICK_MS);
 
 async function loadSettings() {
+  let settings: { provider: string; keys: { [k: string]: string } } = { provider: 'openrouter', keys: {} };
+  let failed = false;
   try {
-    await readAndMigrateSettings();
+    settings = await readAndMigrateSettings();
   } catch (e) {
-    // The UI blocks its settings screen until this message lands, so it has to
-    // be sent even when storage misbehaves.
-    figma.ui.postMessage({ type: 'settings', settings: { provider: 'openrouter', keys: {} } });
+    // The UI blocks its settings screen on this message, so it has to be sent
+    // even when storage misbehaves. `failed` keeps that case distinguishable
+    // from an install that genuinely has no keys.
+    failed = true;
   }
+  figma.ui.postMessage({ type: 'settings', settings, failed });
 }
 
 async function readAndMigrateSettings() {
@@ -139,10 +143,33 @@ async function readAndMigrateSettings() {
   const settings = { provider: stored.provider || 'openrouter', keys };
   if (sawLegacy) {
     await figma.clientStorage.setAsync(STORE, settings);
-    // Persisted, so the old entries are now safe to drop.
-    for (const entry of LEGACY_KEYS) await figma.clientStorage.deleteAsync(entry[0]);
+    try {
+      // Persisted, so the old entries are now safe to drop. Best effort: the
+      // credentials are already migrated, and failing here must not discard
+      // settings that were read successfully.
+      for (const entry of LEGACY_KEYS) await figma.clientStorage.deleteAsync(entry[0]);
+    } catch (e) {}
   }
-  figma.ui.postMessage({ type: 'settings', settings });
+  return settings;
+}
+
+// The UI sends only what the user changed, and this merges those edits onto
+// whatever is actually in storage. Writing a whole settings object built from
+// the UI's idea of the world is what made every stale or failed load
+// destructive, so it no longer does that.
+async function saveSettings(provider: string, edits: { [k: string]: string | null }) {
+  try {
+    const stored = (await figma.clientStorage.getAsync(STORE)) || {};
+    const keys: { [k: string]: string } = Object.assign({}, stored.keys || {});
+    for (const id of Object.keys(edits)) {
+      const value = edits[id];
+      if (value) keys[id] = value;
+      else delete keys[id];
+    }
+    await figma.clientStorage.setAsync(STORE, { provider, keys });
+  } catch (e) {
+    figma.notify("Couldn't save your settings.");
+  }
 }
 
 loadSettings();
@@ -165,6 +192,6 @@ figma.ui.onmessage = (msg) => {
   }
 
   if (msg.type === 'save-settings') {
-    figma.clientStorage.setAsync(STORE, msg.settings);
+    saveSettings(msg.provider, msg.edits || {});
   }
 };
