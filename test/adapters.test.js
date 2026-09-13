@@ -87,7 +87,7 @@ function newUiInstance() { return new Function(uiSrc + `; return {
   get provider(){return provider}, set provider(v){provider=v},
   get keys(){return keys}, set keys(v){keys=v},
   get draftProvider(){return draftProvider}, get mode(){return mode},
-  get saving(){return saving}, get loading(){return loading}, sendUserText,
+  get saving(){return saving}, get loading(){return loading}, sendUserText, idleDuck,
   set fallbackTurn(v){fallbackTurn=v}, set fallbackItemCursor(v){fallbackItemCursor=v},
   PROVIDERS, activeKey, askDuck, apiMessages, apiErrorMessage, emptyReason,
   fallbackReply, openSettings, idleDuck };`)(); }
@@ -232,6 +232,34 @@ async function run() {
   check('the confirmation is what moves the live provider and keys',
     [ui.provider, ui.keys.google, ui.keys.openrouter], ['google', 'AIza-new', 'sk-or-keep']);
   check('and closes the settings screen', [ui.mode, ui.saving], ['idle', false]);
+
+  // --- An in-flight reply must not stomp or wedge another screen ------------
+  // Pre-existing: a finished reply repainted the chat over whatever the user
+  // had moved to. With the save lock that also left settings locked forever.
+  const stomp = makeUi();
+  stomp.deliver({ type: 'settings', settings: { provider: 'openrouter', keys: { openrouter: 'sk-or' } } });
+  stomp.messages = [];
+  const reply = stomp.sendUserText('still there?');
+  // User leaves the chat and saves a settings change while the reply is out.
+  stomp.idleDuck();
+  stomp.openSettings();
+  el('key-input').value = 'sk-or-2';
+  el('save').onclick();
+  check('the settings screen is locked while its save is in flight',
+    [stomp.mode, stomp.saving], ['settings', true]);
+
+  // The reply lands first, on a screen the user is no longer looking at.
+  stomp.deliver({ type: 'board-context', board: [] });
+  await reply;
+  check('a reply landing elsewhere does not repaint over settings', stomp.mode, 'settings');
+
+  // Now storage confirms.
+  stomp.deliver({ type: 'settings', saved: true, settings: { provider: 'openrouter', keys: { openrouter: 'sk-or-2' } } });
+  check('the confirmation still unlocks the save wherever the user is',
+    [stomp.saving, stomp.mode], [false, 'idle']);
+  stomp.openSettings();
+  check('and settings is usable again, not stuck on Saving...',
+    el('root').innerHTML.indexOf('Saving...') > -1, false);
 
   // --- Settings opened before startup finishes ------------------------------
   // code.ts needs several storage round-trips before it can send the saved

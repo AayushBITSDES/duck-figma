@@ -392,7 +392,9 @@ async function sendUserText(userText: string, first = false) {
   // Unconditional: the key can disappear while the board request is in flight,
   // and the fallback branch used to leave this stuck on.
   loading = false;
-  renderChat();
+  // The user may have walked away from the chat while this was in flight.
+  // Repaint only if they are still looking at it.
+  if (mode === 'chat') renderChat();
 }
 
 // Error bubbles never go back to the model. Consecutive same-role turns are
@@ -519,7 +521,7 @@ function renderChat() {
   };
   document.getElementById('refresh')!.onclick = async () => {
     await requestBoard();
-    renderChat();
+    if (mode === 'chat') renderChat();
   };
   const dropBtn = document.getElementById('drop');
   if (dropBtn && droppable) {
@@ -571,19 +573,17 @@ window.onmessage = (event) => {
     keys = settings.keys || {};
     settingsLoaded = true;
     settingsFailed = !!msg.failed;
+    // Never gate this on the current screen: an async reply landing first can
+    // move the user elsewhere, and a save left marked in flight locks the
+    // settings form for the rest of the session.
+    const wasSaving = saving;
+    saving = false;
     if (mode === 'settings') {
-      // Either this is the save we were waiting on, or it is the startup load
-      // releasing the wait screen. Nothing else sends this message, so it can
-      // never land on a draft the user is midway through typing.
-      if (saving) {
-        saving = false;
-        idleDuck();
-      } else {
-        openSettings();
-      }
+      // Either the save being waited on, which closes the screen, or the
+      // startup load releasing the wait state. Nothing else sends this message.
+      if (wasSaving) idleDuck();
+      else openSettings();
     }
-    // Re-seed a settings screen that was opened before this arrived.
-    if (mode === 'settings') openSettings();
   }
 };
 
