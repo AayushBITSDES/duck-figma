@@ -77,15 +77,16 @@ setInterval(() => {
   }
 }, CHECK_INTERVAL_MS);
 
-const KEY_STORE = 'openaiApiKey';
+const KEY_STORE = 'openrouterApiKey';
 
 figma.clientStorage.getAsync(KEY_STORE).then((key) => {
   figma.ui.postMessage({ type: 'api-key', key: key || null });
 });
 
-// This plugin used to store an Anthropic key. Don't leave a stale secret sitting
-// in clientStorage on machines that ran the old build.
+// Earlier builds stored keys for other providers. Don't leave stale secrets
+// sitting in clientStorage on machines that ran them.
 figma.clientStorage.deleteAsync('anthropicApiKey');
+figma.clientStorage.deleteAsync('openaiApiKey');
 
 // Give the UI a board snapshot up front so the first reply is never board-blind.
 sendBoard();

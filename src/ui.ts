@@ -2,9 +2,12 @@ type Mood = 'stuck' | 'frustrated' | 'thinking' | 'fine';
 type ChatMsg = { role: 'user' | 'assistant'; content: string; error?: boolean };
 type Mode = 'idle' | 'settings' | 'checkin' | 'chat';
 
-// gpt-5.4-nano is ~4x cheaper if the duck starts costing real money.
-const MODEL = 'gpt-5.4-mini';
+const MODEL = 'google/gemma-4-31b-it:free';
 const MAX_REPLY_TOKENS = 220;
+// Paste a tester key here and nobody has to set anything up. It ships inside the
+// plugin, so treat it as public and disposable: free models only, never a key
+// with credit on it, and don't commit one to a public repo.
+const SHARED_KEY = '';
 
 const root = document.getElementById('root')!;
 let mode: Mode = 'idle';
@@ -117,14 +120,14 @@ function showSettings() {
   mode = 'settings';
   render(
     '<div class="panel">' +
-    '<div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">' + duckSvg(28) + '<p class="msg" style="margin:0;">Add your OpenAI API key so I can actually talk back.</p></div>' +
-    '<input id="key-input" type="password" placeholder="sk-..." value="' + escapeAttr(apiKey || '') + '" style="width:100%; box-sizing:border-box; padding:6px; border-radius:8px; border:1px solid #ddd; font-size:12px; margin-bottom:8px;" />' +
+    '<div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">' + duckSvg(28) + '<p class="msg" style="margin:0;">Add your OpenRouter API key so I can actually talk back.</p></div>' +
+    '<input id="key-input" type="text" spellcheck="false" placeholder="sk-or-v1-..." value="' + escapeAttr(apiKey || '') + '" style="width:100%; box-sizing:border-box; padding:6px; border-radius:8px; border:1px solid #ddd; font-size:12px; margin-bottom:8px;" />' +
     '<div class="actions">' +
     '<button id="save-key">Save</button>' +
     (apiKey ? '<button id="clear-key">Remove key</button>' : '') +
     '<button id="back">Back</button>' +
     '</div>' +
-    '<p style="font-size:10px; color:#999; margin-top:8px;">Stored locally on this device. Board text and your messages get sent to api.openai.com when you chat. Without a key I still read the board, but my replies are canned templates, not a conversation.</p>' +
+    '<p style="font-size:10px; color:#999; margin-top:8px;">Stored locally on this device. Board text and your messages get sent to openrouter.ai when you chat. Without a key I still read the board, but my replies are canned templates, not a conversation.</p>' +
     '</div>'
   );
   document.getElementById('save-key')!.onclick = () => {
@@ -205,11 +208,12 @@ function apiMessages() {
 
 function apiErrorMessage(status: number, detail: string): string {
   const tail = detail ? ' (' + detail + ')' : '';
-  if (status === 401) return 'OpenAI rejected that key. Check it in settings' + tail + '.';
+  if (status === 401) return 'OpenRouter rejected that key. Check it in settings' + tail + '.';
+  if (status === 402) return 'That key has no credit left for this model' + tail + '.';
   if (status === 403) return "That key isn't allowed to use this model" + tail + '.';
-  if (status === 404) return 'OpenAI does not know the model ' + MODEL + tail + '.';
-  if (status === 429) return 'Rate limited, or the account is out of credit. Give it a minute' + tail + '.';
-  if (status >= 500) return "OpenAI's server errored (" + status + '). Try again in a moment.';
+  if (status === 404) return 'OpenRouter does not know the model ' + MODEL + tail + '.';
+  if (status === 429) return "Too many requests. The free tier allows 20 a minute and 50 a day, shared by everyone using this key" + tail + '.';
+  if (status >= 500) return "OpenRouter's server errored (" + status + '). Try again in a moment.';
   return 'The API refused that request (' + status + ')' + tail + '.';
 }
 
@@ -218,7 +222,7 @@ async function askDuck() {
     const boardNote = boardItems.length
       ? '\n\nHere is a snapshot of text currently on the board, in no particular order:\n- ' + boardItems.join('\n- ')
       : '\n\nThe board looks empty right now, or has nothing with text on it.';
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -227,13 +231,9 @@ async function askDuck() {
       body: JSON.stringify({
         model: MODEL,
         max_completion_tokens: MAX_REPLY_TOKENS,
-        // The duck should answer, not deliberate. Reasoning tokens would come
-        // out of the same budget as the visible reply.
-        reasoning_effort: 'none',
-        verbosity: 'low',
         messages: [
           {
-            role: 'developer',
+            role: 'system',
             content:
               "You are a small yellow rubber duck sitting on a FigJam board, keeping a designer company while they work. Warm, plain, brief, 2 to 4 sentences. Check in on how they are doing before problem solving. Ask one question at a time. Reference specific things from the board snapshot when it helps, otherwise ignore it. Never lecture, never sound like a corporate assistant." +
               boardNote,
@@ -264,7 +264,7 @@ async function askDuck() {
   } catch (e) {
     messages.push({
       role: 'assistant',
-      content: "Couldn't reach api.openai.com. Check your connection, then try again.",
+      content: "Couldn't reach openrouter.ai. Check your connection, then try again.",
       error: true,
     });
   }
@@ -367,7 +367,7 @@ window.onmessage = (event) => {
   }
   // Back to work: stand down only if the duck is still just asking.
   if (msg.type === 'resume' && mode === 'checkin') idleDuck();
-  if (msg.type === 'api-key') apiKey = msg.key;
+  if (msg.type === 'api-key') apiKey = msg.key || SHARED_KEY || null;
 };
 
 idleDuck();
