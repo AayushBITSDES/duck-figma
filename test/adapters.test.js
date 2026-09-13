@@ -215,14 +215,16 @@ async function run() {
   el('key-input').value = 'AIza-new';
   posted.length = 0;
   el('save').onclick();
-  check('Save applies the provider', ui.provider, 'google');
-  check('Save applies the new key and keeps the others',
-    [ui.keys.google, ui.keys.openrouter, ui.keys.anthropic], ['AIza-new', 'sk-or-keep', 'sk-ant-keep']);
   const saved = posted.filter((m) => m.type === 'save-settings').pop();
-  check('Save persists through one save-settings message',
-    posted.filter((m) => m.type === 'save-settings').length, 1);
-  check('Save sends only what changed, never the whole key map',
-    [saved.provider, saved.edits, 'keys' in saved], ['google', { google: 'AIza-new' }, false]);
+  check('Save sends one message with only what changed, never the whole map',
+    [posted.filter((m) => m.type === 'save-settings').length, saved.provider, saved.edits, 'keys' in saved],
+    [1, 'google', { google: 'AIza-new' }, false]);
+  check('Save does not advance local state before code.ts confirms',
+    [ui.provider, ui.keys.google], ['openrouter', undefined]);
+
+  ui.deliver({ type: 'settings', saved: true, settings: { provider: 'google', keys: { openrouter: 'sk-or-keep', anthropic: 'sk-ant-keep', google: 'AIza-new' } } });
+  check('the confirmation is what moves the live provider and keys',
+    [ui.provider, ui.keys.google, ui.keys.openrouter], ['google', 'AIza-new', 'sk-or-keep']);
 
   // --- Settings opened before startup finishes ------------------------------
   // code.ts needs several storage round-trips before it can send the saved
@@ -240,10 +242,31 @@ async function run() {
   el('key-input').value = 'sk-ant-edited';
   posted.length = 0;
   el('save').onclick();
-  check('saving after a late load keeps the other provider keys',
-    [early.keys.anthropic, early.keys.openrouter], ['sk-ant-edited', 'sk-or-saved']);
-  check('and sends only the edited provider',
+  check('saving after a late load sends only the edited provider',
     posted.filter((m) => m.type === 'save-settings').pop().edits, { anthropic: 'sk-ant-edited' });
+
+  // --- A save that failed must stay retryable -------------------------------
+  const retry = makeUi();
+  retry.deliver({ type: 'settings', settings: { provider: 'openrouter', keys: { openrouter: 'sk-or-saved' } } });
+  retry.openSettings();
+  el('key-input').value = 'sk-or-new';
+  el('save').onclick();
+  retry.deliver({ type: 'save-failed' });
+  check('a failed save leaves the confirmed key untouched', retry.keys.openrouter, 'sk-or-saved');
+
+  retry.openSettings();
+  check('reopening settings still shows what the user typed', el('key-input').value, 'sk-or-new');
+  posted.length = 0;
+  el('save').onclick();
+  check('and pressing Save sends the edit again rather than nothing',
+    posted.filter((m) => m.type === 'save-settings').pop().edits, { openrouter: 'sk-or-new' });
+
+  retry.deliver({ type: 'settings', saved: true, settings: { provider: 'openrouter', keys: { openrouter: 'sk-or-new' } } });
+  retry.openSettings();
+  posted.length = 0;
+  el('save').onclick();
+  check('once confirmed, a further Save sends nothing to redo',
+    posted.filter((m) => m.type === 'save-settings').pop().edits, {});
 
   // Storage failure still has to unblock the screen.
   const broken = makeUi();
@@ -361,6 +384,20 @@ async function runCodeTests() {
   check('a save from a UI with a stale view cannot wipe stored keys',
     boot.state.duckSettings.keys, { openrouter: 'sk-or', google: 'AIza-new', openai: 'sk-o' });
 
+  // --- Two saves in flight at once -----------------------------------------
+  // Save closes the panel immediately, so a second save can start before the
+  // first read-modify-write finishes. Both edits have to survive.
+  boot = bootPlugin({ duckSettings: { provider: 'openrouter', keys: {} } });
+  await settled();
+  boot.send({ type: 'save-settings', provider: 'openai', edits: { openai: 'sk-o' } });
+  boot.send({ type: 'save-settings', provider: 'google', edits: { google: 'AIza' } });
+  await settled(); await settled(); await settled(); await settled();
+  check('overlapping saves do not drop each other',
+    boot.state.duckSettings.keys, { openai: 'sk-o', google: 'AIza' });
+
+  check('a successful save is confirmed back to the UI',
+    boot.sent.filter((m) => m.type === 'settings' && m.saved).length, 2);
+
   // --- Storage failures ----------------------------------------------------
   // Migration wrote the credentials, then cleanup failed. That must not be
   // reported as an empty install, or the next save would overwrite them.
@@ -387,6 +424,8 @@ async function runCodeTests() {
   check('a save that cannot read storage refuses instead of overwriting',
     boot.state.duckSettings.keys, { google: 'AIza' });
   check('and says so rather than failing silently', boot.notified.length, 1);
+  check('and tells the UI, so the edit can be retried',
+    boot.sent.filter((m) => m.type === 'save-failed').length, 1);
 }
 
 run();

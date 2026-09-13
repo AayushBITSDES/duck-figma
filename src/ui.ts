@@ -110,8 +110,12 @@ let draftKeys: { [k: string]: string } = {};
 // map, and saving it would wipe every other provider's key.
 let settingsLoaded = false;
 let settingsFailed = false;
-// What the open draft was seeded from, so Save can send just the difference.
+// `keys` mirrors what code.ts has confirmed is in storage, and nothing else
+// advances it. Edits that have been sent but not confirmed live here until
+// code.ts says they landed, so a failed save can be retried rather than being
+// silently adopted as the new baseline.
 let seededKeys: { [k: string]: string } = {};
+let pendingEdits: { [k: string]: string | null } = {};
 
 function activeKey(): string {
   const stored = (keys[provider] || '').trim();
@@ -238,8 +242,17 @@ function openSettings() {
     );
     return;
   }
+  // Draft shows the user's intent (confirmed keys plus anything still pending),
+  // while the baseline stays the confirmed truth, so an unsaved edit still
+  // reads as a difference and gets resent.
+  const draft = Object.assign({}, keys);
+  for (const id of Object.keys(pendingEdits)) {
+    const value = pendingEdits[id];
+    if (value) draft[id] = value;
+    else delete draft[id];
+  }
   draftProvider = provider;
-  draftKeys = Object.assign({}, keys);
+  draftKeys = draft;
   seededKeys = Object.assign({}, keys);
   showSettings();
 }
@@ -283,7 +296,7 @@ function showSettings() {
     '<div><label for="key-input">API key</label>' +
     '<input id="key-input" type="text" spellcheck="false" autocomplete="off" placeholder="' + escapeAttr(p.hint) + '" value="' + escapeAttr(draftKeys[draftProvider] || '') + '" /></div>' +
     (settingsFailed
-      ? '<div class="bubble err">Couldn\'t read your saved settings. Anything you change here is still saved on its own, but other providers\' keys may not be shown.</div>'
+      ? '<div class="bubble err">Couldn\'t reach your saved settings. What you type here is kept and will be sent again when you press Save.</div>'
       : '') +
     '<div class="muted tiny">Model: ' + escapeHtml(p.model) + '</div>' +
     '<div class="muted tiny">Keys are stored on this device only. In live mode your board text and messages go to ' + escapeHtml(p.label) + ' and nowhere else. Without a key I still read the board, but replies are canned templates rather than a conversation.</div>' +
@@ -303,9 +316,10 @@ function showSettings() {
   };
   document.getElementById('save')!.onclick = () => {
     stashDraftKey();
-    provider = draftProvider;
-    keys = Object.assign({}, draftKeys);
-    post({ type: 'save-settings', provider: provider, edits: draftEdits() });
+    const edits = draftEdits();
+    // Not applied locally: code.ts confirms what actually landed.
+    pendingEdits = Object.assign({}, pendingEdits, edits);
+    post({ type: 'save-settings', provider: draftProvider, edits: edits });
     idleDuck();
   };
   const clear = document.getElementById('clear');
@@ -550,12 +564,21 @@ window.onmessage = (event) => {
   }
   // Back to work: stand down only if the duck is still just asking.
   if (msg.type === 'resume' && mode === 'checkin') idleDuck();
+  // The edits stay in pendingEdits, so reopening settings shows them and
+  // pressing Save sends them again.
+  if (msg.type === 'save-failed') settingsFailed = true;
   if (msg.type === 'settings') {
     const settings = msg.settings || {};
     if (PROVIDERS[settings.provider as ProviderId]) provider = settings.provider;
     keys = settings.keys || {};
     settingsLoaded = true;
     settingsFailed = !!msg.failed;
+    // Drop only the pending edits this message actually reflects; another save
+    // may still be in flight behind it.
+    for (const id of Object.keys(pendingEdits)) {
+      const wanted = pendingEdits[id] || '';
+      if ((keys[id] || '') === wanted) delete pendingEdits[id];
+    }
     // Re-seed a settings screen that was opened before this arrived.
     if (mode === 'settings') openSettings();
   }

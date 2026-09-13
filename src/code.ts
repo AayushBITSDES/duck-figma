@@ -153,11 +153,20 @@ async function readAndMigrateSettings() {
   return settings;
 }
 
-// The UI sends only what the user changed, and this merges those edits onto
-// whatever is actually in storage. Writing a whole settings object built from
-// the UI's idea of the world is what made every stale or failed load
-// destructive, so it no longer does that.
-async function saveSettings(provider: string, edits: { [k: string]: string | null }) {
+// This file owns the stored settings. The UI sends only what the user changed
+// and never assumes a write landed; every outcome is reported back, so the UI
+// mirrors storage instead of guessing at it.
+let saveQueue: Promise<void> = Promise.resolve();
+
+function saveSettings(provider: string, edits: { [k: string]: string | null }) {
+  // Read-modify-write is not atomic, so serialise. Two saves in flight would
+  // otherwise both merge onto the same snapshot and the later write would drop
+  // the earlier one's edit.
+  saveQueue = saveQueue.then(() => applySettings(provider, edits));
+  return saveQueue;
+}
+
+async function applySettings(provider: string, edits: { [k: string]: string | null }) {
   try {
     const stored = (await figma.clientStorage.getAsync(STORE)) || {};
     const keys: { [k: string]: string } = Object.assign({}, stored.keys || {});
@@ -166,9 +175,13 @@ async function saveSettings(provider: string, edits: { [k: string]: string | nul
       if (value) keys[id] = value;
       else delete keys[id];
     }
-    await figma.clientStorage.setAsync(STORE, { provider, keys });
+    const settings = { provider, keys };
+    await figma.clientStorage.setAsync(STORE, settings);
+    figma.ui.postMessage({ type: 'settings', settings, saved: true });
   } catch (e) {
     figma.notify("Couldn't save your settings.");
+    // Told, not silently dropped: the UI keeps the edits so they can be retried.
+    figma.ui.postMessage({ type: 'save-failed' });
   }
 }
 
