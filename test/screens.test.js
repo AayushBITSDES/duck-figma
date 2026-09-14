@@ -21,6 +21,7 @@ function boot() {
     state: stateMod.state,
     openSettings: screens.openSettings,
     idleDuck: screens.idleDuck,
+    showCheckIn: screens.showCheckIn,
     sendUserText: screens.sendUserText,
     deliver: (m) => global.window.onmessage({ data: { pluginMessage: m } }),
   };
@@ -88,4 +89,101 @@ module.exports = async function run() {
   await inflight;
   check('losing the key mid-send falls back instead of hanging on thinking',
     [wedge.state.loading, wedge.state.messages.length], [false, 2]);
+
+  // --- A paste into the settings form must survive a repaint that has ------
+  // --- nothing to do with the key -------------------------------------------
+  const size = boot();
+  size.deliver({ type: 'settings', settings: { provider: 'openrouter', key: '' } });
+  size.openSettings();
+  el('key-input').value = 'pasted-key';
+  el('key-input').oninput();
+  el('text-size').value = '14';
+  el('text-size').onchange();
+  dom.posted.length = 0;
+  el('save').onclick();
+  const sizeSaved = dom.posted.filter((m) => m.type === 'save-settings').pop();
+  check('a text size change does not discard a pasted key', sizeSaved.key, 'pasted-key');
+
+  // Collapsing rebuilds #root from scratch (see showCollapsed()), which used
+  // to lose the same draft a different way: repaint() re-ran openSettings(),
+  // which reseeds the draft from storage rather than the in-progress edit.
+  const collapseSettings = boot();
+  collapseSettings.deliver({ type: 'settings', settings: { provider: 'openrouter', key: '' } });
+  collapseSettings.openSettings();
+  el('key-input').value = 'pasted-key';
+  el('key-input').oninput();
+  collapseSettings.deliver({ type: 'window', minimized: true });
+  collapseSettings.deliver({ type: 'window', minimized: false });
+  check('a pasted key survives collapsing and expanding the panel', el('key-input').value, 'pasted-key');
+
+  // --- render() swallows a paint while collapsed; the caller must not then -
+  // --- reach into a screen that was never painted ---------------------------
+  const resumeCollapsed = boot();
+  resumeCollapsed.showCheckIn();
+  resumeCollapsed.deliver({ type: 'window', minimized: true });
+  let resumeThrew = false;
+  try {
+    resumeCollapsed.deliver({ type: 'resume' });
+  } catch (e) {
+    resumeThrew = true;
+  }
+  check('resuming while collapsed does not throw reaching into an unpainted idle screen', resumeThrew, false);
+  check('the duck still stands down to idle underneath', resumeCollapsed.state.mode, 'idle');
+
+  // A reply landing after the user collapsed mid-send used to throw from
+  // inside renderChat() as an unhandled rejection, since nothing awaits
+  // sendUserText() from its real caller (the Send button's onclick).
+  const replyCollapsed = boot();
+  replyCollapsed.deliver({ type: 'settings', settings: { provider: 'openrouter', key: 'sk-or' } });
+  replyCollapsed.state.messages = [];
+  const sendWhileCollapsing = replyCollapsed.sendUserText('are you there');
+  replyCollapsed.deliver({ type: 'window', minimized: true });
+  replyCollapsed.deliver({ type: 'board-context', board: [] });
+  let replyThrew = false;
+  try {
+    await sendWhileCollapsing;
+  } catch (e) {
+    replyThrew = true;
+  }
+  check('a reply landing while collapsed does not throw reaching into an unpainted thread', replyThrew, false);
+
+  // --- The resize grip must not stay live behind the collapsed duck --------
+  // ui.html hides #grip with `body.min #grip`, since #grip lives outside
+  // #root and no selector built on #root's own content can reach it. This
+  // pins the class toggle that CSS depends on; there is no CSS engine here
+  // to check the display:none itself.
+  const grip = boot();
+  grip.deliver({ type: 'window', minimized: true });
+  check('collapsing marks the body so the stylesheet hides #grip', dom.body.classList.contains('min'), true);
+  grip.deliver({ type: 'window', minimized: false });
+  check('expanding clears it again', dom.body.classList.contains('min'), false);
+
+  // --- Every screen change reports itself to the plugin --------------------
+  // The plugin cannot see which screen is up, and expandForCheckIn refuses to
+  // pop the panel open unless it has been told the UI is idle. So if these
+  // stop being posted, a collapsed duck goes quiet: the check-in still fires,
+  // the window never opens, and nobody sees the question. That failure is
+  // invisible on the plugin side, which is why it is pinned here.
+  const modes = boot();
+  dom.posted.length = 0;
+  modes.showCheckIn();
+  check('entering the check-in reports checkin', dom.posted.filter((m) => m.type === 'mode').pop(), {
+    type: 'mode',
+    mode: 'checkin',
+  });
+
+  dom.posted.length = 0;
+  modes.idleDuck();
+  check('going back to rest reports idle', dom.posted.filter((m) => m.type === 'mode').pop(), {
+    type: 'mode',
+    mode: 'idle',
+  });
+
+  dom.posted.length = 0;
+  modes.deliver({ type: 'settings', settings: { provider: 'openrouter', key: 'sk-or-saved' } });
+  modes.openSettings();
+  check('opening settings reports settings', dom.posted.filter((m) => m.type === 'mode').pop(), {
+    type: 'mode',
+    mode: 'settings',
+  });
 };

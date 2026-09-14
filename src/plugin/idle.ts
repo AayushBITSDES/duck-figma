@@ -59,9 +59,12 @@ export function startIdleWatch() {
     if (Date.now() - lastActivity > IDLE_THRESHOLD_MS && !checkInActive) {
       checkInActive = true;
       // A question posted to a collapsed duck lands on a 70x70 window nobody
-      // can read, so open up first. Only fires when the duck is resting, and
-      // expandForCheckIn is a no-op when the panel is already open, so this
-      // cannot resize a conversation out from under someone.
+      // can read, so open up first. This module only knows the user has gone
+      // quiet, not what screen the UI is showing; expandForCheckIn is the one
+      // that knows, and is a no-op both when the panel is already open (so
+      // this can never resize a conversation out from under someone) and
+      // when the UI hasn't reported itself idle (so this can never pop the
+      // window open to ask a question nobody is going to see).
       expandForCheckIn();
       figma.ui.postMessage({ type: 'checkin', board: getBoardItems() });
     }

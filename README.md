@@ -28,7 +28,7 @@ Pick a provider in settings and paste a key. One provider and one key are kept a
 
 The key is stored locally via `figma.clientStorage`. In live mode, board text and your messages go to the selected provider on every chat turn, nowhere else.
 
-For tester builds, put an OpenRouter key in `SHARED_KEY` at the top of `src/ui.ts` and nobody has to set anything up. It ships inside the plugin, so it is public: free models only, and don't commit one.
+For tester builds, put an OpenRouter key in `SHARED_KEY` at the top of `src/ui/state.ts` and nobody has to set anything up. It ships inside the plugin, so it is public: free models only, and don't commit one.
 
 ## Setup
 Already built. Import `manifest.json` in FigJam: Plugins → Development → Import plugin from manifest. Needs the Figma desktop app.
@@ -48,7 +48,7 @@ That compiles `src/` and asserts against the compiled output: each provider's UR
 
 ## Notes
 - Cursor and viewport come from `figma.activeUsers[0]`, which is FigJam-only and needs the `activeusers` permission. There is no mouse event to subscribe to, so it is polled every 2s. Without the permission the duck falls back to document edits alone.
-- Constants are at the top of `src/code.ts`. Provider definitions are at the top of `src/ui.ts`. Adding a provider means adding one entry there and one case in `test/adapters.test.js`.
+- Constants are split by concern across the top of `src/plugin/idle.ts`, `board.ts`, and `window.ts`. Provider definitions are at the top of `src/ui/providers.ts`. Adding a provider means adding one entry there and one case in `test/api.test.js`.
 - Settings edits are held in a draft and applied on Save, so Back discards them rather than quietly pointing the next conversation somewhere else.
 - Keys saved by older builds (`openrouterApiKey`, `openaiApiKey`, `anthropicApiKey`) are migrated into the current settings on load, and only deleted once the migration has been written.
 - A save carries the whole of the settings, so it replaces rather than merges. There is no shared map for a stale screen to clobber and nothing for two saves to race over. Keeping a key per provider is what made that a problem, and it is gone.
@@ -61,3 +61,8 @@ That compiles `src/` and asserts against the compiled output: each provider's UR
 - "Drop last reply on board" loads the sticky font first, then places the sticky at the centre of your current viewport. It does not move your camera.
 - The duck only interrupts when it is resting. A check-in will not wipe an open conversation or a half-typed API key.
 - The panel is built on Figma's own `--figma-color-*` variables, so it follows the editor's light and dark themes.
+- The panel collapses to a fixed 70x70 duck and back via the minimize button, and remembers whatever size and collapsed state you left it at between launches. Only the plugin can call `figma.ui.resize`, so it owns that geometry outright (`src/plugin/window.ts`); the UI just draws whatever it's told.
+- The open panel can be resized by dragging its bottom-right corner, clamped to 240-800 wide and 320-720 tall. The floor keeps it from shrinking below usable; the ceiling keeps it from growing wide enough to push its own resize grip and minimize button, both anchored to that same corner, off screen.
+- Text size (9-18px, set from Settings) rides with the window geometry rather than with the provider settings, since it is a display preference the user nudges repeatedly rather than something saved once.
+- Assistant replies are rendered as markdown: bold, italics, inline code, fenced code blocks, bulleted and numbered lists. Links and images come out as literal text rather than live tags, on purpose, forever: there is nowhere useful to navigate to from inside a plugin iframe, and a model-supplied URL is otherwise a ready-made injection path.
+- Model replies also get their em-dashes and en-dashes rewritten to plain hyphens on the way in, on top of asking for that in the prompt, because models ignore the prompt often enough that asking alone is not a fix.

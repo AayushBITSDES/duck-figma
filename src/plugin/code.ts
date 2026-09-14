@@ -2,7 +2,7 @@ import { sendBoard } from './board';
 import { startIdleWatch, dismissCheckIn } from './idle';
 import { loadSettings, saveSettings } from './settings-store';
 import { dropSticky } from './sticky';
-import { initWindow, handleResize, handleMinimize, handleExpand, handleTextSize } from './window';
+import { initWindow, handleResize, handleMinimize, handleExpand, handleTextSize, handleUiMode } from './window';
 
 figma.showUI(__html__, { width: 280, height: 380, themeColors: true });
 
@@ -50,5 +50,12 @@ figma.ui.onmessage = (msg) => {
 
   if (msg.type === 'text-size') {
     handleTextSize(msg.size);
+  }
+
+  // See the MESSAGE CONTRACT comment in window.ts: this is how the plugin
+  // finds out whether the UI is actually idle, since it has no window into
+  // that on its own.
+  if (msg.type === 'mode') {
+    handleUiMode(msg.mode);
   }
 };

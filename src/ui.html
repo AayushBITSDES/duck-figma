@@ -108,7 +108,12 @@
     border-right: 1.5px solid var(--figma-color-text-secondary);
     border-bottom: 1.5px solid var(--figma-color-text-secondary);
     opacity: 0.6; }
-  .collapsed ~ #grip, body.min #grip { display: none; }
+  /* The collapsed screen renders inside #root, and #grip is #root's sibling,
+     so no selector built on the collapsed markup itself (".collapsed ~
+     #grip") can ever reach it. bridge.ts toggles this class on <body> in
+     step with state.minimized instead, which display:none then makes fully
+     inert: no cursor, no hit target, dragging or clicking it does nothing. */
+  body.min #grip { display: none; }
 </style>
 </head>
 <body>

@@ -1,10 +1,23 @@
-import { state, activeKey } from './state';
+import { state, activeKey, Mode } from './state';
 import { PROVIDERS, PROVIDER_IDS, ProviderId } from './providers';
 import { render, renderCollapsed, escapeHtml, escapeAttr, renderMarkdown } from './render';
 import { duckSvg } from './duck';
 import { Mood, moodOpeners, fallbackReply, resetFallbackCursors } from './fallback';
 import { askDuck } from './api';
 import { post, requestBoard, applyTextSize } from './bridge';
+
+// The plugin has no window into which screen is up, and it needs one: a
+// check-in firing while the duck is collapsed should only pop the panel open
+// if the duck is actually going to ask something. Reporting every screen
+// change beats the plugin guessing, and beats it expanding on a check-in the
+// UI then declines to show. See the MESSAGE CONTRACT in plugin/window.ts.
+//
+// Every screen goes through here rather than assigning state.mode directly,
+// so a new screen cannot forget to report itself.
+function setMode(mode: Mode) {
+  state.mode = mode;
+  post({ type: 'mode', mode: mode });
+}
 
 export function header(sub: string) {
   return (
@@ -42,14 +55,20 @@ export function showCollapsed() {
 // Expanding cannot just restore the HTML that was on screen before, because
 // its event handlers died with it. Re-running the screen rebinds them.
 export function repaint() {
-  if (state.mode === 'settings') return openSettings();
+  // openSettings() reseeds the draft from storage, which is right for a
+  // fresh entry into settings but wrong for coming back from a collapse: it
+  // would throw away whatever the user had typed. Once settings have loaded
+  // the draft is the source of truth, so re-run the form as-is instead of
+  // re-opening it. Before that load finishes there is no draft to lose (the
+  // form itself has not rendered yet), so openSettings() is still right.
+  if (state.mode === 'settings') return state.settingsLoaded ? showSettings() : openSettings();
   if (state.mode === 'checkin') return showCheckIn();
   if (state.mode === 'chat') return renderChat();
   return idleDuck();
 }
 
 export function idleDuck() {
-  state.mode = 'idle';
+  setMode('idle');
   render(
     '<div class="screen"><div class="idle">' +
     '<div id="duck" class="idle-duck" title="Talk to the duck">' + duckSvg(72) + '</div>' +
@@ -57,6 +76,11 @@ export function idleDuck() {
     '<button id="settings" class="ghost">Settings</button>' +
     '</div>' + minimizeButton() + '</div>'
   );
+  // render() already swallowed the paint above while collapsed, leaving
+  // #root's old (or absent) content in place; wiring handlers to elements
+  // that were never (re)painted is what used to throw here. The mode change
+  // above still stands, so expanding later repaints the right screen.
+  if (state.minimized) return;
   document.getElementById('duck')!.onclick = () => {
     post({ type: 'get-board' });
     showCheckIn();
@@ -66,7 +90,7 @@ export function idleDuck() {
 
 export function openSettings() {
   if (!state.settingsLoaded) {
-    state.mode = 'settings';
+    setMode('settings');
     render(
       '<div class="screen">' + header('settings') +
       '<div class="body"><div class="muted">Loading your saved settings...</div></div>' +
@@ -80,7 +104,7 @@ export function openSettings() {
 }
 
 export function showSettings() {
-  state.mode = 'settings';
+  setMode('settings');
   const p = PROVIDERS[state.draftProvider];
   const options = PROVIDER_IDS.map(
     (id) =>
@@ -104,8 +128,20 @@ export function showSettings() {
     '<button id="back" class="ghost">Back</button>' +
     '</div></div>'
   );
+  // Same reasoning as idleDuck(): nothing was actually painted while
+  // collapsed, so there is nothing here to wire up yet.
+  if (state.minimized) return;
   const select = document.getElementById('provider') as HTMLSelectElement;
   const input = document.getElementById('key-input') as HTMLInputElement;
+  // Kept in sync on every keystroke (paste included) rather than read once at
+  // Save time, because a repaint of this screen can happen for reasons that
+  // have nothing to do with the key: a text size change, or the panel being
+  // collapsed and expanded while settings is still open. Either would
+  // otherwise rebuild the form from the stale draft and silently drop
+  // whatever was typed.
+  input.oninput = () => {
+    state.draftKey = input.value;
+  };
   select.onchange = () => {
     state.draftProvider = select.value as ProviderId;
     // One key is kept, for the provider in use. Switching to a different one
@@ -132,7 +168,7 @@ export function showSettings() {
 }
 
 export function showCheckIn() {
-  state.mode = 'checkin';
+  setMode('checkin');
   const moods: [Mood, string][] = [
     ['stuck', 'Stuck'],
     ['frustrated', 'Frustrated'],
@@ -148,6 +184,9 @@ export function showCheckIn() {
     '<div class="ftr"><button id="dismiss" class="ghost">Not now</button></div>' +
     '</div>'
   );
+  // Same reasoning as idleDuck(): nothing was actually painted while
+  // collapsed, so there is nothing here to wire up yet.
+  if (state.minimized) return;
   document.querySelectorAll<HTMLButtonElement>('.body button').forEach((b) => {
     b.onclick = () => startChat(b.dataset.m as Mood);
   });
@@ -188,7 +227,7 @@ export async function sendUserText(userText: string, first = false) {
 }
 
 export function renderChat() {
-  state.mode = 'chat';
+  setMode('chat');
   let turns = '';
   state.messages.forEach((m) => {
     const mine = m.role === 'user';
@@ -220,6 +259,10 @@ export function renderChat() {
     '<div class="muted tiny">' + escapeHtml(boardLine()) + '</div>' +
     '</div></div>'
   );
+  // Same reasoning as idleDuck(): a reply can land while collapsed (nothing
+  // awaits sendUserText, so this runs on its own schedule), and nothing was
+  // actually painted just now, so there is nothing here to scroll or wire up.
+  if (state.minimized) return;
   const thread = document.getElementById('thread')!;
   thread.scrollTop = thread.scrollHeight;
   document.getElementById('send')!.onclick = () => {

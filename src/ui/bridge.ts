@@ -55,6 +55,11 @@ window.onmessage = (event) => {
   if (msg.type === 'window') {
     const was = state.minimized;
     state.minimized = !!msg.minimized;
+    // #grip lives outside #root so it survives every screen repaint, which
+    // means no selector built on #root's own content can ever hide it (see
+    // ui.html). This class is the only thing standing between the collapsed
+    // 70x70 duck and a dead resize handle drawn on top of it.
+    document.body.classList.toggle('min', state.minimized);
     if (typeof msg.textSize === 'number') applyTextSize(msg.textSize);
     if (state.minimized && !was) showCollapsed();
     else if (!state.minimized && was) repaint();

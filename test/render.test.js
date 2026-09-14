@@ -37,12 +37,48 @@ module.exports = async function run() {
   check('markdown: link markup stays literal text', link, '<p>[click](javascript:alert(1))</p>');
   check('markdown: and never becomes an anchor', /<a[\s>]/.test(link), false);
 
+  // A fenced block with no blank line around it used to auto-close the <p>
+  // at <pre> (a block-level element) and strand the trailing text outside
+  // it, losing .bubble p's margins. This is the default shape of a reply
+  // that includes a code block without extra spacing around it.
+  check('markdown: a fenced block with no blank line around it does not spill the paragraph',
+    renderMarkdown('Here:\n```\ncode\n```\nmore text'),
+    '<p>Here:</p><pre><code>code</code></pre><p>more text</p>');
+
+  // JSON can carry any byte in a string, sentinel included, so a reply that
+  // happens to contain the placeholder marker used to forge a block or span
+  // and splice "undefined" into the output via an index nothing pushed.
+  check('markdown: a forged block sentinel does not resurrect a block',
+    renderMarkdown('x \x0e0\x0e y'), '<p>x 0 y</p>');
+  check('markdown: a forged span sentinel does not resurrect a span',
+    renderMarkdown('x \x0f0\x0f y'), '<p>x 0 y</p>');
+
   // Spaced and unspaced dashes want different results: a clause break reads
   // as " - ", a number range as "-".
   check('dashes: an em dash between words keeps its spaces', stripDashes('a — b'), 'a - b');
   check('dashes: an unspaced en dash in a range stays tight', stripDashes('3–5'), '3-5');
   check('dashes: a spaced en dash is normalized too', stripDashes('x – y'), 'x - y');
   check('dashes: text without any is untouched', stripDashes('plain - hyphen'), 'plain - hyphen');
+
+  // A model's list reply opens every item with an em-dash right after the
+  // newline. \s* used to swallow that newline along with the dash, flattening
+  // the whole list onto one line.
+  check('dashes: a list opened with em-dashes keeps its line breaks',
+    stripDashes('Two things:\n\n— Tighten the nav\n— Then the copy\n\nWhich?'),
+    'Two things:\n\n- Tighten the nav\n- Then the copy\n\nWhich?');
+
+  // The newline before it is left alone; only the space already sitting
+  // after the dash carries through.
+  check('dashes: a dash at the start of a line keeps the newline before it',
+    stripDashes('intro\n— item'), 'intro\n- item');
+
+  // A dash inside a fenced code block can be meaningful code (a CLI flag, a
+  // print statement with a literal em-dash in it), so that region is left
+  // untouched entirely, the same fence shape the markdown renderer treats
+  // as code. Previously this also merged the two code lines onto one.
+  check('dashes: a dash inside a fenced code block is left alone',
+    stripDashes('```js\nconst gap = a — b\nlet x = 1\n—y\n```'),
+    '```js\nconst gap = a — b\nlet x = 1\n—y\n```');
 
   // A 200 with message.refusal and no content is the model declining, not the
   // plugin malfunctioning, so say what it actually said.

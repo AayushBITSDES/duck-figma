@@ -10,11 +10,38 @@ const DUCK_BRIEF =
 // is also what goes back as history on the next turn and the model is not
 // handed its own em-dashes as an example to follow.
 //
+// Same fence shape the renderer treats as code (render.ts), so a dash this
+// function leaves alone is exactly a dash the bubble will show as code.
+const FENCE = /```[^\n]*\n[\s\S]*?```/g;
+
 // Both dashes collapse to a plain hyphen. Spaced ("a - b") and unspaced
 // ("3-5") forms are preserved as they were written rather than forced into one
 // shape, since a number range and a clause break want different spacing.
+//
+// Only [ \t] is ever consumed around the dash, never \s: a model's list
+// reply opens each item with an em-dash right after the newline
+// ("\n\n\u2014 item"), and \s would eat that newline along with the dash,
+// flattening the list onto one line. The two sides are judged independently
+// (not "does either side have space, so both get one") so a dash sitting
+// right after a newline stays tight on that side while the space before the
+// next word is left alone.
 export function stripDashes(text: string): string {
-  return text.replace(/\s*[\u2014\u2013]\s*/g, (match) => (/^\s|\s$/.test(match) ? ' - ' : '-'));
+  let out = '';
+  let last = 0;
+  FENCE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = FENCE.exec(text))) {
+    out += stripProseDashes(text.slice(last, m.index)) + m[0];
+    last = m.index + m[0].length;
+  }
+  return out + stripProseDashes(text.slice(last));
+}
+
+function stripProseDashes(text: string): string {
+  return text.replace(
+    /([ \t]*)[\u2014\u2013]([ \t]*)/g,
+    (_match, before: string, after: string) => (before ? ' ' : '') + '-' + (after ? ' ' : '')
+  );
 }
 
 // Error bubbles never go back to the model. Consecutive same-role turns are

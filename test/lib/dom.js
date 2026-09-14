@@ -2,8 +2,16 @@
  * Fake DOM, good for exactly what the ui screens touch: getElementById,
  * innerHTML (which re-renders the fake tree), one createElement used only for
  * HTML-escaping, querySelectorAll (nothing under test reads its result, so it
- * just returns nothing), and the handful of element properties the
- * assertions in screens.test.js read back.
+ * just returns nothing), a body.classList stub, and the handful of element
+ * properties the assertions in screens.test.js read back.
+ *
+ * getElementById returns null for any id not present in whatever HTML was
+ * last actually assigned to #root, the same as a real DOM would for an id
+ * nothing painted. A version that handed back a fresh dummy object for any
+ * id ever asked, painted or not, is what let render() returning early while
+ * collapsed (see render.ts) go unnoticed: production code kept dereferencing
+ * elements from a screen that was never repainted, and the fake never threw
+ * to show it, where a browser would.
  *
  * install() is called once, at the start of that file's run(): a render()
  * call clears out the previous screen's elements itself (see rerender
@@ -11,11 +19,15 @@
  * reset this between each other.
  */
 const els = {};
+// The last HTML actually written to #root. Nothing has painted yet at
+// startup, so only 'root' itself (never part of its own content) resolves.
+let currentHtml = '';
+
 function el(id) {
   if (!els[id]) {
     els[id] = {
       id: id, value: '', dataset: {}, scrollTop: 0, scrollHeight: 0,
-      onclick: null, onchange: null, _html: '',
+      onclick: null, onchange: null, oninput: null, _html: '',
       set innerHTML(v) { this._html = v; if (id === 'root') rerender(v); },
       get innerHTML() { return this._html; },
       set textContent(v) {
@@ -28,6 +40,7 @@ function el(id) {
 // A real render replaces the DOM, so stale nodes and anything typed into them
 // are gone. Without this the stub leaks one screen's input into the next.
 function rerender(html) {
+  currentHtml = html;
   for (const k of Object.keys(els)) if (k !== 'root') delete els[k];
   const unescape = (v) => v.replace(/&quot;/g, '"').replace(/&amp;/g, '&');
   const input = /id="key-input"[^>]*\svalue="([^"]*)"/.exec(html);
@@ -36,6 +49,26 @@ function rerender(html) {
   if (selected) el('provider').value = selected[1];
 }
 
+// The gate a real getElementById applies before this stub hands back
+// anything: an id nothing painted does not resolve to an element, whether
+// or not this stub has been asked for it before.
+function getElementById(id) {
+  if (id !== 'root' && currentHtml.indexOf('id="' + id + '"') === -1) return null;
+  return el(id);
+}
+
+// Only #grip's visibility runs through this in practice (see bridge.ts's
+// 'window' handler), so it needs nothing beyond add/remove/toggle/contains.
+const bodyClasses = new Set();
+const body = {
+  classList: {
+    add: (c) => bodyClasses.add(c),
+    remove: (c) => bodyClasses.delete(c),
+    toggle: (c, on) => (on === undefined ? (bodyClasses.has(c) ? bodyClasses.delete(c) : bodyClasses.add(c)) : (on ? bodyClasses.add(c) : bodyClasses.delete(c))),
+    contains: (c) => bodyClasses.has(c),
+  },
+};
+
 const posted = [];
 let lastCall = null;
 // Good enough for any scenario that exercises askDuck() only incidentally,
@@ -43,7 +76,11 @@ let lastCall = null;
 let nextResponse = { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: 'ok' } }] }) };
 
 function install() {
-  global.document = { getElementById: el, createElement: () => el('tmp' + Math.random()), querySelectorAll: () => [] };
+  global.document = {
+    getElementById, createElement: () => el('tmp' + Math.random()), querySelectorAll: () => [], body,
+    // applyTextSize's only touch on the DOM: a CSS variable on the root element.
+    documentElement: { style: { setProperty: () => {} } },
+  };
   global.parent = { postMessage: (m) => posted.push(m.pluginMessage) };
   global.window = {};
   global.fetch = async (url, opts) => { lastCall = { url, opts }; return nextResponse; };
@@ -51,6 +88,7 @@ function install() {
 
 module.exports = {
   el,
+  body,
   posted,
   install,
   setNextResponse: (r) => { nextResponse = r; },
