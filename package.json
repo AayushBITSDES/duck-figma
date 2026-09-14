@@ -5,7 +5,7 @@
   "scripts": {
     "build": "webpack --mode=production",
     "watch": "webpack --mode=development --watch",
-    "test": "tsc -p tsconfig.json --outDir .test-build --module none && node test/adapters.test.js"
+    "test": "tsc -p tsconfig.json --outDir .test-build --module commonjs && node test/adapters.test.js"
   },
   "devDependencies": {
     "@figma/plugin-typings": "^1.90.0",

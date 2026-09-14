@@ -6,8 +6,8 @@ module.exports = (env, argv) => ({
   mode: argv.mode === 'production' ? 'production' : 'development',
   devtool: false,
   entry: {
-    ui: './src/ui.ts',
-    code: './src/code.ts',
+    ui: './src/ui/ui.ts',
+    code: './src/plugin/code.ts',
   },
   module: {
     rules: [{ test: /\.ts$/, use: 'ts-loader', exclude: /node_modules/ }],
