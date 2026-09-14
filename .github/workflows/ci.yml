@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      # manifest.json loads dist/ directly, so dist IS the shipped plugin. If it
+      # drifts from src, FigJam quietly runs stale code and no test would catch
+      # it. This fails the build rather than letting that ship.
+      - name: dist is up to date with src
+        run: |
+          if ! git diff --quiet -- dist/; then
+            echo "dist/ does not match a fresh build of src/. Run 'npm run build' and commit the result."
+            git diff --stat -- dist/
+            exit 1
+          fi
