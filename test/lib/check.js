@@ -13,8 +13,16 @@ function check(name, actual, expected) {
   console.log('FAIL ' + name + '\n  got:  ' + JSON.stringify(actual) + '\n  want: ' + JSON.stringify(expected));
 }
 
+// The bundle tests assert on a condition plus a detail string to print when it
+// fails, rather than comparing two values, so they use this instead of check.
+function ok(name, cond, detail) {
+  if (cond) { passed++; console.log('pass ' + name); return; }
+  failed++;
+  console.log('FAIL ' + name + (detail ? '\n  ' + detail : ''));
+}
+
 function counts() {
   return { passed, failed };
 }
 
-module.exports = { check, counts };
+module.exports = { check, ok, counts };

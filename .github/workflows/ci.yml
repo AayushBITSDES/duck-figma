@@ -33,6 +33,13 @@ jobs:
       - name: Build
         run: npm run build
 
+      # These load dist/ rather than src/, so they only mean anything after a
+      # build. They catch what the unit tests structurally cannot: the webpack
+      # ESM bundle failing to boot where the CommonJS test build is fine, and
+      # controls wired with addEventListener that no exported function touches.
+      - name: Test the shipped bundle
+        run: npm run test:bundle
+
       # manifest.json loads dist/ directly, so dist IS the shipped plugin. If it
       # drifts from src, FigJam quietly runs stale code and no test would catch
       # it. This fails the build rather than letting that ship.
