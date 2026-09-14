@@ -1,18 +1,51 @@
 import { state, activeKey } from './state';
 import { PROVIDERS, PROVIDER_IDS, ProviderId } from './providers';
-import { render, escapeHtml, escapeAttr } from './render';
+import { render, renderCollapsed, escapeHtml, escapeAttr, renderMarkdown } from './render';
 import { duckSvg } from './duck';
 import { Mood, moodOpeners, fallbackReply, resetFallbackCursors } from './fallback';
 import { askDuck } from './api';
-import { post, requestBoard } from './bridge';
+import { post, requestBoard, applyTextSize } from './bridge';
 
 export function header(sub: string) {
   return (
     '<div class="hdr">' + duckSvg(20) +
     '<span class="hdr-title">Duck Check-In</span>' +
     '<span class="hdr-sub">' + escapeHtml(sub) + '</span>' +
+    minimizeButton() +
     '</div>'
   );
+}
+
+// Clicks are handled by one delegated listener in ui.ts rather than rebound by
+// every screen after every paint, so this is markup only.
+// 9 to 18 matches the clamp in plugin/window.ts. Anything outside it is
+// clamped over there anyway, so the list just avoids offering a size that
+// would silently snap back.
+function textSizeOptions() {
+  let out = '';
+  for (let px = 9; px <= 18; px++) {
+    out += '<option value="' + px + '"' + (px === state.textSize ? ' selected' : '') + '>' + px + 'px</option>';
+  }
+  return out;
+}
+
+export function minimizeButton() {
+  return '<button id="min" class="ghost mini" title="Collapse to the duck">-</button>';
+}
+
+// The collapsed view: a 70x70 window that is all duck. 70 is figma.showUI's
+// hard floor for width, so this is as small as a plugin window goes.
+export function showCollapsed() {
+  renderCollapsed('<div class="collapsed" id="collapsed" title="Open the duck">' + duckSvg(44) + '</div>');
+}
+
+// Expanding cannot just restore the HTML that was on screen before, because
+// its event handlers died with it. Re-running the screen rebinds them.
+export function repaint() {
+  if (state.mode === 'settings') return openSettings();
+  if (state.mode === 'checkin') return showCheckIn();
+  if (state.mode === 'chat') return renderChat();
+  return idleDuck();
 }
 
 export function idleDuck() {
@@ -22,7 +55,7 @@ export function idleDuck() {
     '<div id="duck" class="idle-duck" title="Talk to the duck">' + duckSvg(72) + '</div>' +
     '<div class="muted">Working away. I\'ll say hi if the board goes quiet.</div>' +
     '<button id="settings" class="ghost">Settings</button>' +
-    '</div></div>'
+    '</div>' + minimizeButton() + '</div>'
   );
   document.getElementById('duck')!.onclick = () => {
     post({ type: 'get-board' });
@@ -61,6 +94,8 @@ export function showSettings() {
     '<select id="provider">' + options + '</select></div>' +
     '<div><label for="key-input">API key</label>' +
     '<input id="key-input" type="text" spellcheck="false" autocomplete="off" placeholder="' + escapeAttr(p.hint) + '" value="' + escapeAttr(state.draftKey) + '" /></div>' +
+    '<div><label for="text-size">Text size</label>' +
+    '<select id="text-size">' + textSizeOptions() + '</select></div>' +
     '<div class="muted tiny">Model: ' + escapeHtml(p.model) + '</div>' +
     '<div class="muted tiny">Your key is stored on this device only. In live mode your board text and messages go to ' + escapeHtml(p.label) + ' and nowhere else. Without a key I still read the board, but replies are canned templates rather than a conversation.</div>' +
     '</div>' +
@@ -78,6 +113,15 @@ export function showSettings() {
     state.draftKey = state.draftProvider === state.provider ? state.storedKey : '';
     showSettings();
   };
+  const size = document.getElementById('text-size') as HTMLSelectElement | null;
+  if (size) {
+    size.onchange = () => {
+      const px = parseInt(size.value, 10);
+      applyTextSize(px);
+      post({ type: 'text-size', size: px });
+      showSettings();
+    };
+  }
   document.getElementById('save')!.onclick = () => {
     state.provider = state.draftProvider;
     state.storedKey = input.value.trim();
@@ -149,10 +193,13 @@ export function renderChat() {
   state.messages.forEach((m) => {
     const mine = m.role === 'user';
     const cls = m.error ? 'err' : mine ? 'mine' : 'them';
+    // The user typed theirs literally, and our own error copy has no markdown
+    // in it, so only a successful assistant reply gets the markdown pass.
+    const body = mine || m.error ? escapeHtml(m.content) : renderMarkdown(m.content);
     turns +=
       '<div class="turn' + (mine ? ' mine' : '') + '">' +
       (mine || m.error ? '' : duckSvg(16)) +
-      '<div class="bubble ' + cls + '">' + escapeHtml(m.content) + '</div></div>';
+      '<div class="bubble ' + cls + '">' + body + '</div></div>';
   });
   if (state.loading) {
     turns += '<div class="turn">' + duckSvg(16) + '<div class="bubble them muted">thinking...</div></div>';

@@ -1,6 +1,13 @@
 import { state } from './state';
 import { PROVIDERS, ProviderId } from './providers';
-import { idleDuck, showCheckIn, openSettings } from './screens';
+import { idleDuck, showCheckIn, openSettings, showCollapsed, repaint } from './screens';
+
+// One CSS variable drives the whole panel: every control already inherits its
+// font, so nothing else has to know the size changed.
+export function applyTextSize(px: number) {
+  state.textSize = Math.min(18, Math.max(9, Math.round(px)));
+  document.documentElement.style.setProperty('--duck-font', state.textSize + 'px');
+}
 
 export function post(msg: any) {
   parent.postMessage({ pluginMessage: msg }, '*');
@@ -42,6 +49,16 @@ window.onmessage = (event) => {
   }
   // Back to work: stand down only if the duck is still just asking.
   if (msg.type === 'resume' && state.mode === 'checkin') idleDuck();
+  // The plugin owns window state, since it is the only side that can call
+  // figma.ui.resize. We follow what it reports rather than tracking our own,
+  // so a clamp applied over there can never leave the two disagreeing.
+  if (msg.type === 'window') {
+    const was = state.minimized;
+    state.minimized = !!msg.minimized;
+    if (typeof msg.textSize === 'number') applyTextSize(msg.textSize);
+    if (state.minimized && !was) showCollapsed();
+    else if (!state.minimized && was) repaint();
+  }
   if (msg.type === 'settings') {
     const settings = msg.settings || {};
     if (PROVIDERS[settings.provider as ProviderId]) state.provider = settings.provider;

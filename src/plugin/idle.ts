@@ -1,4 +1,5 @@
 import { getBoardItems } from './board';
+import { expandForCheckIn } from './window';
 
 export const IDLE_THRESHOLD_MS = 20 * 1000;
 export const TICK_MS = 2 * 1000;
@@ -57,6 +58,11 @@ export function startIdleWatch() {
     }
     if (Date.now() - lastActivity > IDLE_THRESHOLD_MS && !checkInActive) {
       checkInActive = true;
+      // A question posted to a collapsed duck lands on a 70x70 window nobody
+      // can read, so open up first. Only fires when the duck is resting, and
+      // expandForCheckIn is a no-op when the panel is already open, so this
+      // cannot resize a conversation out from under someone.
+      expandForCheckIn();
       figma.ui.postMessage({ type: 'checkin', board: getBoardItems() });
     }
   }, TICK_MS);

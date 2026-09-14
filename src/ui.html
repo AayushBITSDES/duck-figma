@@ -10,7 +10,7 @@
   body {
     margin: 0;
     font-family: Inter, -apple-system, BlinkMacSystemFont, sans-serif;
-    font-size: 11px;
+    font-size: var(--duck-font, 11px);
     line-height: 1.45;
     color: var(--figma-color-text);
     background: var(--figma-color-bg);
@@ -34,7 +34,7 @@
   .row > * { flex: 1; min-width: 0; }
   .ftr > button { width: 100%; }
   .muted { color: var(--figma-color-text-secondary); }
-  .tiny { font-size: 10px; }
+  .tiny { font-size: calc(var(--duck-font, 11px) - 1px); }
 
   button {
     font: inherit; height: 28px; padding: 0 10px;
@@ -71,6 +71,14 @@
   .bubble.them { background: var(--figma-color-bg-secondary); }
   .bubble.mine { background: var(--figma-color-bg-brand); color: var(--figma-color-text-onbrand); }
   .bubble.err { border: 1px solid var(--figma-color-border-danger-strong); color: var(--figma-color-text-danger); }
+  .bubble p { margin: 0; }
+  .bubble p + p { margin-top: 6px; }
+  .bubble ul, .bubble ol { margin: 0; padding-left: 18px; }
+  .bubble code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10px; background: rgba(127, 127, 127, 0.16); border-radius: 3px; padding: 1px 3px; }
+  /* A long unbroken line (a URL, a hash) must scroll inside the code block
+     rather than force the whole 280px panel to scroll sideways. */
+  .bubble pre { margin: 0; overflow-x: auto; background: rgba(127, 127, 127, 0.16); border-radius: 6px; padding: 6px 8px; }
+  .bubble pre code { background: none; padding: 0; }
 
   /* The duck is the one hand-drawn thing in here. Let it breathe. */
   .idle { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; height: 100%; }
@@ -78,9 +86,33 @@
   .idle-duck:hover { animation-play-state: paused; }
   @keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
   @media (prefers-reduced-motion: reduce) { .idle-duck { animation: none; } }
+
+  /* Collapsed: the whole 70x70 window is duck, and the whole thing is the
+     click target. 70 is figma.showUI's hard floor for width. */
+  .collapsed { display: flex; align-items: center; justify-content: center;
+    height: 100vh; cursor: pointer; animation: bob 2.6s ease-in-out infinite; }
+  .collapsed:hover { animation-play-state: paused; }
+  @media (prefers-reduced-motion: reduce) { .collapsed { animation: none; } }
+
+  button.mini { position: absolute; top: 6px; right: 6px; height: 18px;
+    width: 18px; padding: 0; text-align: center; line-height: 1; opacity: 0.5; }
+  button.mini:hover { opacity: 1; }
+
+  /* Figma gives a plugin window no resize handle of its own and fires no
+     resize event, so the panel has to draw its own grip and ask the plugin
+     to resize. Kept out of #root so it survives every screen repaint. */
+  #grip { position: fixed; right: 0; bottom: 0; width: 14px; height: 14px;
+    cursor: nwse-resize; touch-action: none; }
+  #grip::after { content: ''; position: absolute; right: 3px; bottom: 3px;
+    width: 6px; height: 6px;
+    border-right: 1.5px solid var(--figma-color-text-secondary);
+    border-bottom: 1.5px solid var(--figma-color-text-secondary);
+    opacity: 0.6; }
+  .collapsed ~ #grip, body.min #grip { display: none; }
 </style>
 </head>
 <body>
 <div id="root"></div>
+<div id="grip"></div>
 </body>
 </html>

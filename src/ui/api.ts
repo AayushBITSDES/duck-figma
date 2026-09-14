@@ -2,7 +2,20 @@ import { state, activeKey } from './state';
 import { PROVIDERS } from './providers';
 
 const DUCK_BRIEF =
-  "You are a small yellow rubber duck sitting on a FigJam board, keeping a designer company while they work. Warm, plain, brief, 2 to 4 sentences. Check in on how they are doing before problem solving. Ask one question at a time. Reference specific things from the board snapshot when it helps, otherwise ignore it. Never lecture, never sound like a corporate assistant.";
+  "You are a small yellow rubber duck sitting on a FigJam board, keeping a designer company while they work. Warm, plain, brief, 2 to 4 sentences. Check in on how they are doing before problem solving. Ask one question at a time. Reference specific things from the board snapshot when it helps, otherwise ignore it. Never lecture, never sound like a corporate assistant. Never use em-dashes or en-dashes; write with plain hyphens or reword the sentence.";
+
+// Models ignore the no-dash instruction in DUCK_BRIEF often enough that
+// prompting alone is not a fix, so the reply is rewritten on the way in. It is
+// stored normalized rather than normalized at render time, so the cleaned text
+// is also what goes back as history on the next turn and the model is not
+// handed its own em-dashes as an example to follow.
+//
+// Both dashes collapse to a plain hyphen. Spaced ("a - b") and unspaced
+// ("3-5") forms are preserved as they were written rather than forced into one
+// shape, since a number range and a clause break want different spacing.
+export function stripDashes(text: string): string {
+  return text.replace(/\s*[\u2014\u2013]\s*/g, (match) => (/^\s|\s$/.test(match) ? ' - ' : '-'));
+}
 
 // Error bubbles never go back to the model. Consecutive same-role turns are
 // merged because Anthropic and Google both require the roles to alternate.
@@ -38,6 +51,12 @@ export function apiErrorMessage(status: number, detail: string): string {
 export function emptyReason(data: any): string {
   const c = data && data.choices && data.choices[0];
   const g = data && data.candidates && data.candidates[0];
+  // OpenAI and OpenRouter can answer 200 with a policy refusal in
+  // message.refusal and no content at all. The generic "nothing in it" below
+  // reads like a bug in the plugin, when the model actually said something
+  // deliberate, so the refusal itself is shown instead.
+  const refusal = c && c.message && c.message.refusal;
+  if (typeof refusal === 'string' && refusal.trim()) return refusal.trim();
   const stop = (c && c.finish_reason) || (g && g.finishReason) || (data && data.stop_reason);
   if (stop === 'content_filter' || stop === 'SAFETY') return 'That one got caught by the content filter.';
   if (stop === 'length' || stop === 'max_tokens' || stop === 'MAX_TOKENS') {
@@ -70,7 +89,7 @@ export async function askDuck() {
       state.messages.push({ role: 'assistant', content: emptyReason(data), error: true });
       return;
     }
-    state.messages.push({ role: 'assistant', content: text });
+    state.messages.push({ role: 'assistant', content: stripDashes(text) });
   } catch (e) {
     state.messages.push({
       role: 'assistant',

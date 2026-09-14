@@ -25,6 +25,10 @@ export const state = {
   settingsLoaded: false,
   draftProvider: 'openrouter' as ProviderId,
   draftKey: '',
+  // Mirrors the plugin side's window state. The plugin owns the truth (it is
+  // the only side that can call figma.ui.resize), and tells us via 'window'.
+  minimized: false,
+  textSize: 11,
 };
 
 export function activeKey(): string {
