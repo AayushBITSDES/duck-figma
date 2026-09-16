@@ -1,0 +1,113 @@
+import { state } from './state';
+
+const root = document.getElementById('root')!;
+
+// A reply can land while the duck is collapsed, and screens repaint on their
+// own schedule. Painting a full screen into a 70x70 window would shred it, so
+// paints are swallowed while collapsed and the duck stays put. Expanding calls
+// repaint() in screens.ts, which re-runs the current screen properly rather
+// than restoring stale HTML with dead event handlers.
+export function render(html: string) {
+  if (state.minimized) return;
+  root.innerHTML = html;
+}
+
+// The one paint that is allowed to run while collapsed, because it IS the
+// collapsed view.
+export function renderCollapsed(html: string) {
+  root.innerHTML = html;
+}
+
+export function escapeHtml(s: string) {
+  const div = document.createElement('div');
+  div.textContent = s;
+  return div.innerHTML;
+}
+
+export function escapeAttr(s: string) {
+  return escapeHtml(s).replace(/"/g, '&quot;');
+}
+
+// A small markdown renderer for assistant bubbles, not a library: the model
+// reply is untrusted text going into innerHTML, so it is escaped FIRST with
+// escapeHtml above, and every transform below only ever rearranges the
+// already-escaped string. None of them can turn model output into a live tag.
+//
+// Links and images are deliberately not supported, on purpose, forever: there
+// is nowhere useful to navigate to from inside a plugin iframe, and a
+// javascript: or data: URL in a model reply is otherwise a ready-made
+// injection path. `[text](url)` is meant to come out as literal text.
+export function renderMarkdown(raw: string): string {
+  // Fenced blocks and inline spans are pulled out before anything else runs,
+  // so bold/italic markup inside `code` or a ``` block is never touched.
+  // Blocks and spans use different marker bytes so the block/paragraph pass
+  // below can tell "a whole paragraph that is just a code block" (no <p>
+  // wrapper needed, it is already its own element) from "a code span sitting
+  // inside a sentence" (still wants the <p>).
+  //
+  // \x0e/\x0f are control characters escapeHtml never produces and a person
+  // never types, but valid JSON can carry any byte in a string, sentinel
+  // included, so a reply that happens to contain one is stripped before it
+  // can forge a placeholder and splice a fake block or span into the output.
+  let text = escapeHtml(raw.replace(/[\x0e\x0f]/g, ''));
+
+  const blocks: string[] = [];
+  const spans: string[] = [];
+  text = text.replace(/```[^\n]*\n([\s\S]*?)```/g, (_, code) =>
+    '\x0e' + (blocks.push('<pre><code>' + code.replace(/\n$/, '') + '</code></pre>') - 1) + '\x0e');
+  text = text.replace(/`([^`\n]+)`/g, (_, code) =>
+    '\x0f' + (spans.push('<code>' + code + '</code>') - 1) + '\x0f');
+
+  const inline = (s: string) =>
+    s
+      .replace(/\*\*([^\n]+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*([^*\n]+)\*/g, '<em>$1</em>')
+      // \b before/after `_` only exists where the neighbour is a non-word
+      // char, so mid_word_underscores stay literal instead of italicizing.
+      .replace(/\b_([^_\n]+)_\b/g, '<em>$1</em>');
+
+  const html = text
+    .split(/\n{2,}/) // a blank line is a paragraph break
+    .map((block) => {
+      if (/^\x0e\d+\x0e$/.test(block.trim())) return block.trim();
+      const lines = block.split('\n');
+      const bulleted = lines.every((l) => /^[-*]\s+/.test(l));
+      const numbered = !bulleted && lines.every((l) => /^\d+\.\s+/.test(l));
+      if (bulleted || numbered) {
+        const tag = bulleted ? 'ul' : 'ol';
+        const items = lines
+          .map((l) => '<li>' + inline(l.replace(/^(?:[-*]|\d+\.)\s+/, '')) + '</li>')
+          .join('');
+        return '<' + tag + '>' + items + '</' + tag + '>';
+      }
+      // A fenced block sitting on its own line without a blank line around
+      // it (no \n{2,} to split it into its own block above) still cannot
+      // join the surrounding lines inside one <p>: <pre> is block-level, so
+      // a browser auto-closes the paragraph there anyway, stranding
+      // whatever came after outside the <p> and its margins. Building the
+      // paragraph in pieces around it keeps everything properly closed.
+      let out = '';
+      let para: string[] = [];
+      const flushPara = () => {
+        if (para.length) {
+          out += '<p>' + inline(para.join('<br>')) + '</p>';
+          para = [];
+        }
+      };
+      for (const line of lines) {
+        if (/^\x0e\d+\x0e$/.test(line.trim())) {
+          flushPara();
+          out += line.trim();
+        } else {
+          para.push(line);
+        }
+      }
+      flushPara();
+      return out;
+    })
+    .join('');
+
+  return html
+    .replace(/\x0e(\d+)\x0e/g, (_, i) => blocks[+i])
+    .replace(/\x0f(\d+)\x0f/g, (_, i) => spans[+i]);
+}
