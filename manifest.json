@@ -5,8 +5,14 @@
   "main": "dist/code.js",
   "ui": "dist/ui.html",
   "editorType": ["figjam"],
+  "permissions": ["activeusers"],
   "networkAccess": {
-    "allowedDomains": ["https://openrouter.ai"],
-    "reasoning": "Calls the OpenRouter API so the duck can hold a live conversation, using the user's own API key."
+    "allowedDomains": [
+      "https://openrouter.ai",
+      "https://api.openai.com",
+      "https://api.anthropic.com",
+      "https://generativelanguage.googleapis.com"
+    ],
+    "reasoning": "Calls whichever model provider the user picks, using the user's own API key, so the duck can hold a live conversation."
   }
 }

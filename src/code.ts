@@ -1,12 +1,22 @@
 figma.showUI(__html__, { width: 280, height: 380, themeColors: true });
 
-const IDLE_THRESHOLD_MS = 3 * 60 * 1000;
-const CHECK_INTERVAL_MS = 15 * 1000;
+const IDLE_THRESHOLD_MS = 20 * 1000;
+const TICK_MS = 2 * 1000;
 const MAX_BOARD_ITEMS = 40;
 const MAX_ITEM_LENGTH = 200;
+const STORE = 'duckSettings';
+// Key names earlier builds used, before settings moved into one object. Each
+// names a provider the plugin still supports, so they are migrated rather than
+// dropped, and only deleted once the new settings have actually been written.
+const LEGACY_KEYS: [string, string][] = [
+  ['openrouterApiKey', 'openrouter'],
+  ['openaiApiKey', 'openai'],
+  ['anthropicApiKey', 'anthropic'],
+];
 
-let lastCreateTime = Date.now();
+let lastActivity = Date.now();
 let checkInActive = false;
+let lastPresence = '';
 
 function getBoardItems(): string[] {
   const items: string[] = [];
@@ -37,8 +47,31 @@ function sendBoard() {
   figma.ui.postMessage({ type: 'board-context', board: getBoardItems() });
 }
 
+// figma.activeUsers is FigJam-only and activeUsers[0] is the current user. Its
+// cursor position covers hovering, and its viewport rect covers panning and
+// zooming. There is no mouse event to subscribe to, so this gets polled.
+// Returns '' if the permission is missing, which degrades to edits-only.
+function presence(): string {
+  try {
+    const me = figma.activeUsers[0];
+    if (!me) return '';
+    const p = me.position;
+    const v = me.viewport;
+    return [
+      p ? Math.round(p.x) : 'off',
+      p ? Math.round(p.y) : 'off',
+      Math.round(v.x),
+      Math.round(v.y),
+      Math.round(v.width),
+      Math.round(v.height),
+    ].join(',');
+  } catch (e) {
+    return '';
+  }
+}
+
 function resetActivity() {
-  lastCreateTime = Date.now();
+  lastActivity = Date.now();
   if (checkInActive) {
     checkInActive = false;
     figma.ui.postMessage({ type: 'resume' });
@@ -64,29 +97,57 @@ async function dropSticky(text: string) {
   figma.notify('Dropped the note on your board.');
 }
 
-figma.on('documentchange', (event) => {
-  const madeSomething = event.documentChanges.some((c) => c.type === 'CREATE');
-  if (madeSomething) resetActivity();
-});
+// Any edit counts, not just creating something. Typing into a sticky that
+// already exists is working, and the duck used to talk over it.
+figma.on('documentchange', resetActivity);
 
+lastPresence = presence();
 setInterval(() => {
-  const idleFor = Date.now() - lastCreateTime;
-  if (idleFor > IDLE_THRESHOLD_MS && !checkInActive) {
+  const now = presence();
+  if (now !== lastPresence) {
+    lastPresence = now;
+    resetActivity();
+    return;
+  }
+  if (Date.now() - lastActivity > IDLE_THRESHOLD_MS && !checkInActive) {
     checkInActive = true;
     figma.ui.postMessage({ type: 'checkin', board: getBoardItems() });
   }
-}, CHECK_INTERVAL_MS);
+}, TICK_MS);
 
-const KEY_STORE = 'openrouterApiKey';
+async function loadSettings() {
+  const settings = { provider: 'openrouter', key: '' };
+  try {
+    const stored = await figma.clientStorage.getAsync(STORE);
+    if (stored) {
+      // Settings exist, so they are the truth, including a key the user
+      // deliberately cleared. Never second-guess that with an older value.
+      if (stored.provider) settings.provider = stored.provider;
+      // `keys` is the per-provider shape an earlier build on this branch used.
+      settings.key = stored.key || (stored.keys && stored.keys[settings.provider]) || '';
+    } else {
+      // Nothing saved yet: adopt a key an older build left behind.
+      for (const entry of LEGACY_KEYS) {
+        const legacy = await figma.clientStorage.getAsync(entry[0]);
+        if (typeof legacy === 'string' && legacy.trim()) {
+          settings.provider = entry[1];
+          settings.key = legacy.trim();
+          break;
+        }
+      }
+      if (settings.key) await figma.clientStorage.setAsync(STORE, settings);
+    }
+    // Either way the old names are no longer read, so don't leave the secrets
+    // sitting there. Failing here is harmless; nothing depends on them now.
+    for (const entry of LEGACY_KEYS) await figma.clientStorage.deleteAsync(entry[0]);
+  } catch (e) {
+    // Fall through with the defaults; the UI just shows an empty key field.
+  }
+  figma.ui.postMessage({ type: 'settings', settings });
+}
 
-figma.clientStorage.getAsync(KEY_STORE).then((key) => {
-  figma.ui.postMessage({ type: 'api-key', key: key || null });
-});
 
-// Earlier builds stored keys for other providers. Don't leave stale secrets
-// sitting in clientStorage on machines that ran them.
-figma.clientStorage.deleteAsync('anthropicApiKey');
-figma.clientStorage.deleteAsync('openaiApiKey');
+loadSettings();
 
 // Give the UI a board snapshot up front so the first reply is never board-blind.
 sendBoard();
@@ -94,7 +155,7 @@ sendBoard();
 figma.ui.onmessage = (msg) => {
   if (msg.type === 'dismiss') {
     checkInActive = false;
-    lastCreateTime = Date.now();
+    lastActivity = Date.now();
   }
 
   if (msg.type === 'get-board') {
@@ -105,15 +166,11 @@ figma.ui.onmessage = (msg) => {
     dropSticky(msg.text || 'What are you stuck on?');
   }
 
-  if (msg.type === 'save-key') {
-    figma.clientStorage.setAsync(KEY_STORE, msg.key).then(() => {
-      figma.ui.postMessage({ type: 'api-key', key: msg.key });
-    });
-  }
-
-  if (msg.type === 'clear-key') {
-    figma.clientStorage.deleteAsync(KEY_STORE).then(() => {
-      figma.ui.postMessage({ type: 'api-key', key: null });
-    });
+  // A save carries the whole of the settings, so there is nothing to merge onto
+  // and nothing for two saves to race over.
+  if (msg.type === 'save-settings') {
+    figma.clientStorage
+      .setAsync(STORE, { provider: msg.provider, key: msg.key || '' })
+      .catch(() => figma.notify("Couldn't save your settings."));
   }
 };

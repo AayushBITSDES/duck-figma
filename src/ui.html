@@ -3,49 +3,81 @@
 <head>
 <meta charset="UTF-8" />
 <style>
-  body { margin: 0; font-family: Inter, sans-serif; background: transparent; }
-  #root { display: flex; justify-content: flex-end; align-items: flex-end; height: 100vh; padding: 12px; box-sizing: border-box; }
-  @keyframes bob {
-    0%, 100% { transform: translateY(0); }
-    50% { transform: translateY(-6px); }
-  }
-  .panel {
-    background: #fff;
-    border-radius: 12px;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.15);
-    padding: 14px;
-    width: 240px;
-  }
-  .msg { font-size: 13px; color: #333; line-height: 1.4; }
-  .moods { display: flex; flex-direction: column; gap: 6px; }
-  .moods button, .actions button {
-    padding: 6px 10px;
-    border-radius: 8px;
-    border: 1px solid #ddd;
-    background: #FFF7E0;
-    cursor: pointer;
-    font-size: 12px;
-    text-align: left;
-  }
-  .moods button:hover, .actions button:hover { background: #FFEFC2; }
-  .dismiss {
-    margin-top: 8px;
-    background: none;
-    border: none;
-    color: #888;
-    cursor: pointer;
+  /* Figma injects --figma-color-* and a figma-light/figma-dark class on <html>
+     because showUI passes themeColors. Everything here is built on those, so the
+     panel tracks the editor's theme instead of guessing at it. */
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: Inter, -apple-system, BlinkMacSystemFont, sans-serif;
     font-size: 11px;
+    line-height: 1.45;
+    color: var(--figma-color-text);
+    background: var(--figma-color-bg);
+    -webkit-font-smoothing: antialiased;
   }
-  textarea, input {
-    border-radius: 8px;
-    border: 1px solid #ddd;
-    padding: 6px;
-    font-size: 12px;
-    resize: none;
-    box-sizing: border-box;
-    font-family: inherit;
+  #root { height: 100vh; }
+  .screen { display: flex; flex-direction: column; height: 100%; }
+
+  .hdr {
+    flex: 0 0 auto;
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--figma-color-border);
   }
-  .actions { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+  .hdr-title { font-weight: 600; }
+  .hdr-sub { color: var(--figma-color-text-secondary); }
+
+  .body { flex: 1 1 auto; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+  .ftr { flex: 0 0 auto; padding: 8px 12px 12px; display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--figma-color-border); }
+  .row { display: flex; gap: 6px; }
+  .row > * { flex: 1; min-width: 0; }
+  .ftr > button { width: 100%; }
+  .muted { color: var(--figma-color-text-secondary); }
+  .tiny { font-size: 10px; }
+
+  button {
+    font: inherit; height: 28px; padding: 0 10px;
+    border-radius: 6px; border: 1px solid var(--figma-color-border);
+    background: var(--figma-color-bg); color: var(--figma-color-text);
+    cursor: pointer; text-align: left; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis;
+  }
+  button:hover { background: var(--figma-color-bg-secondary); }
+  button.primary { background: var(--figma-color-bg-brand); color: var(--figma-color-text-onbrand); border-color: transparent; }
+  button.primary:hover { background: var(--figma-color-bg-brand-hover); }
+  button.primary:active { background: var(--figma-color-bg-brand-pressed); }
+  button.ghost { border-color: transparent; color: var(--figma-color-text-secondary); background: none; }
+  button.ghost:hover { color: var(--figma-color-text); background: var(--figma-color-bg-secondary); }
+  button:disabled { opacity: 0.4; cursor: default; }
+  button:disabled:hover { background: var(--figma-color-bg); }
+
+  input, select, textarea {
+    font: inherit; width: 100%; padding: 6px 8px;
+    border-radius: 6px; border: 1px solid var(--figma-color-border);
+    background: var(--figma-color-bg); color: var(--figma-color-text);
+  }
+  input:focus, select:focus, textarea:focus {
+    outline: none;
+    border-color: var(--figma-color-border-selected);
+    box-shadow: inset 0 0 0 1px var(--figma-color-border-selected);
+  }
+  textarea { resize: none; }
+  label { display: block; margin-bottom: 4px; color: var(--figma-color-text-secondary); }
+
+  .turn { display: flex; gap: 6px; align-items: flex-end; }
+  .turn.mine { justify-content: flex-end; }
+  .bubble { border-radius: 8px; padding: 7px 9px; max-width: 82%; }
+  .bubble.them { background: var(--figma-color-bg-secondary); }
+  .bubble.mine { background: var(--figma-color-bg-brand); color: var(--figma-color-text-onbrand); }
+  .bubble.err { border: 1px solid var(--figma-color-border-danger-strong); color: var(--figma-color-text-danger); }
+
+  /* The duck is the one hand-drawn thing in here. Let it breathe. */
+  .idle { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; height: 100%; }
+  .idle-duck { cursor: pointer; animation: bob 2.6s ease-in-out infinite; }
+  .idle-duck:hover { animation-play-state: paused; }
+  @keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+  @media (prefers-reduced-motion: reduce) { .idle-duck { animation: none; } }
 </style>
 </head>
 <body>
