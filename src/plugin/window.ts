@@ -26,12 +26,10 @@
  *     the plugin finds out whether the UI is actually resting: bridge.ts
  *     shows the check-in screen only while its mode is 'idle', and idle.ts
  *     fires expandForCheckIn purely off its own inactivity timer, with no
- *     idea what the UI is showing. NOT YET SENT by the shipped UI; until the
- *     first one arrives the plugin assumes the UI is not idle, so it never
- *     expands the window on a guess. To wire this up, the UI side needs to
- *     post {type: 'mode', mode: state.mode} every time state.mode is
- *     assigned (idleDuck, openSettings/showSettings, showCheckIn, renderChat
- *     in src/ui/screens.ts).
+ *     idea what the UI is showing. Posted by setMode() in src/ui/screens.ts,
+ *     which every screen routes through so a new one cannot forget to report
+ *     itself. None arrives until the UI's first render, so until then the
+ *     plugin assumes it is not idle and never expands on a guess.
  *
  * plugin -> UI
  *   {type: 'window', width, height, minimized, textSize}
@@ -100,6 +98,13 @@ let textSize = DEFAULT_TEXT_SIZE;
 // must assume it is not idle, so it never expands the window on a guess.
 let uiIsIdle = false;
 
+// figma.ui.onmessage is live from code.ts's first tick, but initWindow's
+// clientStorage read only lands a few ticks later. Anything the user does in
+// that gap is newer than the stored snapshot, and the handler that did it has
+// already persisted its own result, so the snapshot has to be dropped rather
+// than applied over the top of it.
+let userActed = false;
+
 let persistTimer: ReturnType<typeof setTimeout> | undefined;
 
 function clampOpen(width: number, height: number): { width: number; height: number } {
@@ -154,6 +159,10 @@ export function initWindow(): Promise<void> {
   return figma.clientStorage
     .getAsync(STORE)
     .then((stored: WindowGeometry | undefined) => {
+      // The user got in first. Their action is newer than this snapshot and is
+      // already both on screen and in storage; applying the snapshot now would
+      // silently undo it.
+      if (userActed) return;
       if (stored) {
         const clamped = clampOpen(stored.width, stored.height);
         openWidth = clamped.width;
@@ -176,6 +185,7 @@ export function handleResize(width: number, height: number) {
   // stuck active is a plausible way for this to fire while minimized, which
   // would otherwise stretch the collapsed 70x70 markup across a full window.
   if (minimized) return;
+  userActed = true;
   const clamped = clampOpen(width, height);
   openWidth = clamped.width;
   openHeight = clamped.height;
@@ -185,6 +195,7 @@ export function handleResize(width: number, height: number) {
 }
 
 export function handleMinimize() {
+  userActed = true;
   minimized = true;
   figma.ui.resize(MINIMIZED_SIZE, MINIMIZED_SIZE);
   postWindow();
@@ -194,6 +205,7 @@ export function handleMinimize() {
 }
 
 export function handleExpand() {
+  userActed = true;
   minimized = false;
   figma.ui.resize(openWidth, openHeight);
   postWindow();
@@ -203,6 +215,7 @@ export function handleExpand() {
 // Nudged from the settings screen. The UI applies the size itself the moment
 // the message comes back, so there is nothing to apply here beyond storing it.
 export function handleTextSize(px: number) {
+  userActed = true;
   textSize = clampText(Number.isFinite(px) ? px : DEFAULT_TEXT_SIZE);
   postWindow();
   persistNow();

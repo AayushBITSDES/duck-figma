@@ -170,6 +170,16 @@ module.exports = async function run() {
   check("a pending debounce from a previous boot never lands in the next boot's storage", boot.state.duckWindow, undefined);
   check('nor does it land anywhere at all once the next boot has started', leaker.state.duckWindow, undefined);
 
+  // figma.ui.onmessage is live from the plugin's first tick, but the stored
+  // geometry only arrives once clientStorage resolves. An action taken in that
+  // gap is newer than the snapshot, so the snapshot must not land on top of it.
+  // The missing `await settled()` before the send is the whole point.
+  boot = bootPlugin({ duckWindow: { width: 300, height: 400, minimized: false } });
+  boot.send({ type: 'minimize' });
+  await settled();
+  check('a minimize during the startup read is not undone by the snapshot', boot.window().minimized, true);
+  check('and the panel stays collapsed', boot.lastResize(), [70, 70]);
+
   boot = bootPlugin({});
   await settled();
   boot.send({ type: 'resize', width: 50, height: 50 });
