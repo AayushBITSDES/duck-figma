@@ -1,68 +1,33 @@
 # Duck Check-In
 
-FigJam plugin. A small yellow duck sits in the panel. When you actually go quiet it checks in: asks how you're feeling first, then talks it through with you, using what's actually on the board.
+A rubber duck that sits in your FigJam board and notices when you get stuck.
 
-## When the duck speaks up
-After 20 seconds in which you have done none of these:
+It watches for you going quiet. After 20 seconds with no cursor movement, no
+panning and no edits, it asks how you're doing. It reads the text on your board
+too, so it can ask about the sticky you've been circling rather than something
+generic. Rubber duck debugging, with the duck deciding when to ask.
 
-- moved your cursor on the canvas
-- panned or zoomed
-- changed anything in the document, including editing text in something that already exists
+## Installing it
 
-So hovering counts as working, and so does reading around the board. The duck only appears when you have genuinely stopped, or walked away. If you left, it is already waiting when you get back.
+You need the Figma **desktop app**. The browser version cannot load a plugin
+from a folder.
 
-## Live chat vs fallback
-Board reading works either way, no key, no cost. It is just pulling text off the canvas.
+1. Download this project to your computer.
+2. Open a FigJam file in the desktop app.
+3. Go to Plugins > Development > Import plugin from manifest.
+4. Choose the `manifest.json` file inside the folder you downloaded.
 
-- No key: fallback mode. Replies are canned templates with real sticky text dropped into them. The panel says so on screen, because it is not a conversation.
-- Key set: live mode. Real conversational replies, still using the board snapshot as context.
+The duck now appears under Plugins > Development > Duck Check-In. You only do
+this once.
 
-Pick a provider in settings and paste a key. One provider and one key are kept at a time, so switching provider means pasting that provider's key.
+## Talking to it
 
-| Provider | Model | Notes |
-| --- | --- | --- |
-| OpenRouter | `thinkingmachines/inkling:free` | Free. 20 requests a minute, 50 a day per account, 1000 a day once the account has bought $10 of credit. The cap is per account, not per model, so every `:free` model shares it. |
-| OpenAI | `gpt-5.6-luna` | Paid, pay as you go. |
-| Anthropic | `claude-haiku-4-5` | Paid, pay as you go. |
-| Google AI Studio | `gemini-3.8-flash` | Has a free tier. |
+It works right away, though its replies come from a fixed script.
 
-The key is stored locally via `figma.clientStorage`. In live mode, board text and your messages go to the selected provider on every chat turn, nowhere else.
+For a real conversation, open Settings in the panel and paste in an API key.
+OpenRouter has a free tier; OpenAI, Anthropic and Google AI Studio also work.
+Your key stays on your own machine.
 
-For tester builds, put an OpenRouter key in `SHARED_KEY` at the top of `src/ui/state.ts` and nobody has to set anything up. It ships inside the plugin, so it is public: free models only, and don't commit one.
+## Working on the code
 
-## Setup
-Already built. Import `manifest.json` in FigJam: Plugins → Development → Import plugin from manifest. Needs the Figma desktop app.
-
-To change the code:
-```
-npm install
-npm run build
-```
-`npm run watch` rebuilds automatically while editing.
-
-Run the checks with:
-```
-npm test
-```
-That compiles `src/` and asserts against the compiled output: each provider's URL, auth header, request body, role mapping and reply path, the error copy, and the migration that carries keys saved by older builds into the current settings.
-
-## Notes
-- Cursor and viewport come from `figma.activeUsers[0]`, which is FigJam-only and needs the `activeusers` permission. There is no mouse event to subscribe to, so it is polled every 2s. Without the permission the duck falls back to document edits alone.
-- Constants are split by concern across the top of `src/plugin/idle.ts`, `board.ts`, and `window.ts`. Provider definitions are at the top of `src/ui/providers.ts`. Adding a provider means adding one entry there and one case in `test/api.test.js`.
-- Settings edits are held in a draft and applied on Save, so Back discards them rather than quietly pointing the next conversation somewhere else.
-- Keys saved by older builds (`openrouterApiKey`, `openaiApiKey`, `anthropicApiKey`) are migrated into the current settings on load, and only deleted once the migration has been written.
-- A save carries the whole of the settings, so it replaces rather than merges. There is no shared map for a stale screen to clobber and nothing for two saves to race over. Keeping a key per provider is what made that a problem, and it is gone.
-- The settings form waits for the stored settings to load before it will show an editable key field, so it can never seed an empty one and let Save wipe a real key.
-- Keys saved by older builds (`openrouterApiKey`, `openaiApiKey`, `anthropicApiKey`, and the per-provider `keys` map an earlier version of this branch used) are carried forward on load.
-- A reply that finishes while you have moved to another screen does not repaint over it.
-- Board snapshot caps at 40 items, 200 characters each. It is re-read before every reply, and the panel footer shows how many items the duck is working from.
-- All four providers answer CORS for a null origin, which is what a plugin iframe sends, so the plugin calls them directly with no proxy. Anthropic needs the `anthropic-dangerous-direct-browser-access` header; the others need nothing special.
-- API failures are shown as what they are (rejected key, rate limit, no network) instead of the duck pretending it lost its train of thought. Failed turns are kept out of the history sent to the model, and same-role turns are merged because Anthropic and Google require roles to alternate.
-- "Drop last reply on board" loads the sticky font first, then places the sticky at the centre of your current viewport. It does not move your camera.
-- The duck only interrupts when it is resting. A check-in will not wipe an open conversation or a half-typed API key.
-- The panel is built on Figma's own `--figma-color-*` variables, so it follows the editor's light and dark themes.
-- The panel collapses to a fixed 70x70 duck and back via the minimize button, and remembers whatever size and collapsed state you left it at between launches. Only the plugin can call `figma.ui.resize`, so it owns that geometry outright (`src/plugin/window.ts`); the UI just draws whatever it's told.
-- The open panel can be resized by dragging its bottom-right corner, clamped to 240-800 wide and 320-720 tall. The floor keeps it from shrinking below usable; the ceiling keeps it from growing wide enough to push its own resize grip and minimize button, both anchored to that same corner, off screen.
-- Text size (9-18px, set from Settings) rides with the window geometry rather than with the provider settings, since it is a display preference the user nudges repeatedly rather than something saved once.
-- Assistant replies are rendered as markdown: bold, italics, inline code, fenced code blocks, bulleted and numbered lists. Links and images come out as literal text rather than live tags, on purpose, forever: there is nowhere useful to navigate to from inside a plugin iframe, and a model-supplied URL is otherwise a ready-made injection path.
-- Model replies also get their em-dashes and en-dashes rewritten to plain hyphens on the way in, on top of asking for that in the prompt, because models ignore the prompt often enough that asking alone is not a fix.
+`npm install`, then `npm run build`. `npm test` runs the checks.
