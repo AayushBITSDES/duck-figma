@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" aria-hidden="true">
+  <path fill="currentColor" fill-rule="evenodd"
+        d="M30 12L43 28C48 26 52 26 57 28L70 12L74 34C80 44 84 56 84 70C84 80 78 88 66 88L34 88C22 88 16 80 16 70C16 56 20 44 26 34Z
+           M31.5 50a5.5 5.5 0 1 0 11 0a5.5 5.5 0 1 0-11 0Z
+           M57.5 50a5.5 5.5 0 1 0 11 0a5.5 5.5 0 1 0-11 0Z"/>
+  <path fill="#F5A623" d="M44 56L56 56L50 64Z"/>
+</svg>
