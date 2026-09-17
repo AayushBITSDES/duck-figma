@@ -37,7 +37,11 @@
   .tiny { font-size: calc(var(--duck-font, 11px) - 1px); }
 
   button {
-    font: inherit; height: 28px; padding: 0 10px;
+    /* min-height, not height: a fixed box clipped its own label the moment
+       --duck-font went past about 14px, which is most of the range the
+       settings screen offers. The floor keeps the hit target comfortable at
+       the small end, and the padding lets it grow from there. */
+    font: inherit; min-height: 28px; padding: 5px 10px;
     border-radius: 6px; border: 1px solid var(--figma-color-border);
     background: var(--figma-color-bg); color: var(--figma-color-text);
     cursor: pointer; text-align: left; white-space: nowrap;
@@ -74,7 +78,9 @@
   .bubble p { margin: 0; }
   .bubble p + p { margin-top: 6px; }
   .bubble ul, .bubble ol { margin: 0; padding-left: 18px; }
-  .bubble code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10px; background: rgba(127, 127, 127, 0.16); border-radius: 3px; padding: 1px 3px; }
+  /* em, not px: this was the one rule that ignored --duck-font, so code spans
+     stayed 10px while everything around them grew. */
+  .bubble code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.9em; background: rgba(127, 127, 127, 0.16); border-radius: 3px; padding: 1px 3px; }
   /* A long unbroken line (a URL, a hash) must scroll inside the code block
      rather than force the whole 280px panel to scroll sideways. */
   .bubble pre { margin: 0; overflow-x: auto; background: rgba(127, 127, 127, 0.16); border-radius: 6px; padding: 6px 8px; }
@@ -94,8 +100,11 @@
   .collapsed:hover { animation-play-state: paused; }
   @media (prefers-reduced-motion: reduce) { .collapsed { animation: none; } }
 
+  /* min-height on button would win over this height, so it is reset here.
+     This one is an icon, not a label: it should stay 18px at every text size. */
   button.mini { position: absolute; top: 6px; right: 6px; height: 18px;
-    width: 18px; padding: 0; text-align: center; line-height: 1; opacity: 0.5; }
+    min-height: 0; width: 18px; padding: 0; text-align: center; line-height: 1;
+    opacity: 0.5; }
   button.mini:hover { opacity: 1; }
 
   /* Figma gives a plugin window no resize handle of its own and fires no
