@@ -23,8 +23,13 @@ function bootPlugin(store) {
   let poll = null;
   global.setInterval = (fn) => { poll = fn; return 0; };
   global.__html__ = '<html></html>';
+  let docChange = null;
   global.figma = {
-    showUI: () => {}, on: () => {}, notify: () => {},
+    showUI: () => {},
+    // The real figma.on hands documentchange a DocumentChangeEvent. The old
+    // stub swallowed the handler, so nothing in here could reach that path.
+    on: (type, fn) => { if (type === 'documentchange') docChange = fn; },
+    notify: () => {},
     currentPage: { findAll: () => [], selection: [] },
     viewport: { center: { x: 0, y: 0 } },
     activeUsers: [],
@@ -48,6 +53,9 @@ function bootPlugin(store) {
     resizes: resizes,
     lastResize: () => resizes[resizes.length - 1],
     checkins: () => sent.filter((m) => m.type === 'checkin'),
+    resumes: () => sent.filter((m) => m.type === 'resume'),
+    // One edit in the file, from this user ('LOCAL') or anyone else ('REMOTE').
+    edit: (origin) => docChange && docChange({ documentChanges: [{ origin: origin }] }),
     // Jump past the idle threshold and run one poll tick, rather than
     // holding the suite up for the real 20 seconds.
     idleTick: () => {
@@ -179,6 +187,20 @@ module.exports = async function run() {
   await settled();
   check('a minimize during the startup read is not undone by the snapshot', boot.window().minimized, true);
   check('and the panel stays collapsed', boot.lastResize(), [70, 70]);
+
+  // documentchange fires for every user in the file, not just this one. A
+  // teammate typing is not this user coming back to work, so it must not stand
+  // the check-in down, and it must not hold the idle timer open either.
+  boot = bootPlugin({});
+  await settled();
+  boot.send({ type: 'mode', mode: 'idle' });
+  boot.idleTick();
+  await settled();
+  check('the duck checks in once the board goes quiet', boot.checkins().length, 1);
+  boot.edit('REMOTE');
+  check('a teammate editing does not stand the check-in down', boot.resumes().length, 0);
+  boot.edit('LOCAL');
+  check('this user editing does', boot.resumes().length, 1);
 
   boot = bootPlugin({});
   await settled();

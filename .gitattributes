@@ -1,2 +1,11 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# dist/ is webpack output, committed only because manifest.json loads it as the
+# shipped plugin. Marking it generated collapses it in GitHub diffs and keeps it
+# out of the repo's language stats, so the minified bundle stops being the first
+# thing anyone opening this repo sees. Deliberately NOT marked -diff: that would
+# make git treat it as binary, which is exactly the trap render.ts fell into in
+# 631f051, where the most security-sensitive file on the branch showed no
+# content in any diff. CI still checks dist matches a fresh build of src.
+dist/** linguist-generated=true
