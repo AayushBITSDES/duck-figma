@@ -158,16 +158,40 @@ module.exports = async function run() {
   ws.last().incoming(snapshot({ round: { id: 2, status: 'collecting' } }));
 
   const beforeBlank = ws.last().sent.length;
-  await b.session.actContribute('   ');
+  const blank = await b.session.actContribute('   ');
   check('a blank contribution is not sent', ws.last().sent.length, beforeBlank);
+  check('and reports no delivery', blank, false);
 
+  b.state.draft = '  hello from the board  ';
   pending = b.session.actContribute('  hello from the board  ');
   await flushBoard(['x'.repeat(250)].concat(Array.from({ length: 45 }, (_, i) => 'item-' + i)));
-  await pending;
+  const delivered = await pending;
   const contrib = ws.last().sent.filter((m) => m.type === 'contribute').pop();
   check('contribute trims text', contrib.text, 'hello from the board');
   check('and clips the board to 40 x 200',
     [contrib.board.length, contrib.board[0].length, contrib.roundId], [40, 200, 2]);
+  check('and reports delivery success', delivered, true);
+  check('and clears the draft after a successful send', b.state.draft, '');
+
+  // Socket drop while waiting for the board must not swallow the draft.
+  b = boot();
+  deliver(identity());
+  ws.last().open();
+  ws.last().incoming(snapshot({ round: { id: 2, status: 'collecting' } }));
+  b.state.draft = 'keep me';
+  const dropSock = ws.last();
+  pending = b.session.actContribute('keep me');
+  dropSock.close();
+  await flushBoard([]);
+  const dropped = await pending;
+  check('socket loss during board wait does not deliver', dropped, false);
+  check('and does not send contribute',
+    dropSock.sent.filter((m) => m.type === 'contribute').length, 0);
+  check('and does not count the round as acted', b.state.actedRoundId, null);
+  check('and keeps the contribution draft', b.state.draft, 'keep me');
+  check('and flags reconnecting', b.state.ws, 'reconnecting');
+  check('and surfaces a send-failed banner',
+    !!(b.state.banner && /Could not send/.test(b.state.banner.text)), true);
 
   b = boot();
   deliver(identity());

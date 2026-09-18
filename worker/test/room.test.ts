@@ -3,10 +3,11 @@ import { runDurableObjectAlarm } from 'cloudflare:test';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ChatMessage, ServerMessage } from '../../src/shared/protocol';
 import { SESSION_LIMITS } from '../../src/shared/protocol';
+import { GLOBAL_LIMITER_INSTANCE } from '../src/limiter';
 import { BOARD_SNAPSHOT_END, BOARD_SNAPSHOT_START, buildFacilitatorMessages } from '../src/openai';
 import { clientId, joinClient, openSocket, roomId, TestClient } from './helpers';
 
-afterEach(() => {
+afterEach(async () => {
   for (const client of openClients) {
     try {
       client.ws.close(1000, 'test done');
@@ -15,6 +16,7 @@ afterEach(() => {
     }
   }
   openClients.length = 0;
+  await env.GLOBAL_LIMITER.getByName(GLOBAL_LIMITER_INSTANCE).reset();
 });
 
 const openClients: TestClient[] = [];
@@ -49,6 +51,27 @@ describe('room routing', () => {
       new Request('https://example.com/room?roomId=nope', { headers: { Upgrade: 'websocket' } })
     );
     expect(res.status).toBe(400);
+  });
+
+  it('rejects guessable file-key room ids', async () => {
+    const res = await exports.default.fetch(
+      new Request('https://example.com/room?roomId=file:abcFileKey', { headers: { Upgrade: 'websocket' } })
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it('accepts opaque room-prefixed ids', async () => {
+    const { response, ws } = await openSocket('room:' + crypto.randomUUID());
+    expect(response.status).toBe(101);
+    expect(ws).not.toBeNull();
+    if (ws) openClients.push(new TestClient(ws));
+  });
+
+  it('does not expose a limiter HTTP route', async () => {
+    for (const path of ['/limiter', '/global', '/budget', '/openai']) {
+      const res = await exports.default.fetch(new Request('https://example.com' + path));
+      expect(res.status).toBe(404);
+    }
   });
 
   it('allows Origin null', async () => {
@@ -369,5 +392,53 @@ describe('openai payload', () => {
     expect(user.slice(start, end)).toContain(injected);
     expect(user.slice(end)).toContain('Alex: Nav is crowded.');
     expect(user.slice(end)).not.toContain(injected);
+  });
+});
+
+describe('global OpenAI limiter', () => {
+  it('persists a rolling 100-attempt daily cap', async () => {
+    const limiter = env.GLOBAL_LIMITER.getByName(GLOBAL_LIMITER_INSTANCE);
+    const now = Date.now();
+    for (let i = 0; i < SESSION_LIMITS.maxOpenAiCallsGlobalPerWindow; i++) {
+      expect(await limiter.tryConsume(now)).toBe(true);
+    }
+    expect(await limiter.tryConsume(now)).toBe(false);
+
+    const later = now + SESSION_LIMITS.openAiCallGlobalWindowMs + 1;
+    expect(await limiter.tryConsume(later)).toBe(true);
+  });
+
+  it('cannot be bypassed by inventing a new room id and never stays thinking', async () => {
+    const limiter = env.GLOBAL_LIMITER.getByName(GLOBAL_LIMITER_INSTANCE);
+    for (let i = 0; i < SESSION_LIMITS.maxOpenAiCallsGlobalPerWindow; i++) {
+      expect(await limiter.tryConsume()).toBe(true);
+    }
+
+    const first = await join(roomId('invented-a'), 'Alex', 'alex');
+    first.send({ type: 'pass', roundId: 1 });
+    const err = await first.until('error');
+    expect(err.type === 'error' && err.code).toBe('rate_limited');
+    const failed = await first.until('round');
+    expect(failed.type === 'round' && failed.round).toEqual({ id: 1, status: 'failed' });
+    expect(
+      first.log.filter((m) => m.type === 'round' && m.round.id === 1 && m.round.status === 'thinking')
+    ).toHaveLength(0);
+
+    const second = await join(roomId('invented-b'), 'Sam', 'sam');
+    second.send({ type: 'pass', roundId: 1 });
+    const errB = await second.until('error');
+    expect(errB.type === 'error' && errB.code).toBe('rate_limited');
+    const failedB = await second.until('round');
+    expect(failedB.type === 'round' && failedB.round.status).toBe('failed');
+    expect(
+      second.log.filter((m) => m.type === 'round' && m.round.status === 'thinking')
+    ).toHaveLength(0);
+
+    first.send({ type: 'retry', roundId: 1 });
+    const retryErr = await first.until('error');
+    expect(retryErr.type === 'error' && retryErr.code).toBe('rate_limited');
+    expect(
+      first.log.filter((m) => m.type === 'round' && m.round.id === 1 && m.round.status === 'thinking')
+    ).toHaveLength(0);
   });
 });

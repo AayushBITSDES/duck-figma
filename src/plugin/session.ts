@@ -1,9 +1,10 @@
 import { SESSION_LIMITS } from '../shared/protocol';
 
-// Document-scoped fallback when figma.fileKey is missing (unsaved files, or
-// public plugins without enablePrivatePluginApi). Stored on the root so every
-// plugin instance in this file reads the same id after collab sync.
+// Document-scoped opaque room token. Never figma.fileKey: that value is
+// guessable, and this demo has no account auth. Stored on the root so every
+// plugin instance in this file reads the same capability after collab sync.
 export const ROOM_PLUGIN_DATA_KEY = 'duckRoomId';
+export const ROOM_ID_PREFIX = 'room:';
 // Per-machine identity, not per file. The Worker keys presence on this.
 export const CLIENT_STORAGE_KEY = 'duckClientId';
 
@@ -22,11 +23,6 @@ function mintUuid(): string {
   });
 }
 
-function fileKey(): string {
-  const key = typeof figma.fileKey === 'string' ? figma.fileKey.trim() : '';
-  return key;
-}
-
 export function displayName(): string {
   try {
     const raw = (figma.currentUser && figma.currentUser.name) || '';
@@ -40,15 +36,12 @@ export function displayName(): string {
 }
 
 export function resolveRoomId(): string {
-  const key = fileKey();
-  if (key) return 'file:' + key;
-
   const existing = figma.root.getPluginData(ROOM_PLUGIN_DATA_KEY);
-  if (existing) return 'local:' + existing;
+  if (existing) return ROOM_ID_PREFIX + existing;
 
   const minted = mintUuid();
   figma.root.setPluginData(ROOM_PLUGIN_DATA_KEY, minted);
-  return 'local:' + (figma.root.getPluginData(ROOM_PLUGIN_DATA_KEY) || minted);
+  return ROOM_ID_PREFIX + (figma.root.getPluginData(ROOM_PLUGIN_DATA_KEY) || minted);
 }
 
 function isClientId(value: string): boolean {
@@ -80,13 +73,14 @@ function postSession() {
   });
 }
 
-// Two first-opens of an unsaved file can mint two UUIDs before pluginData
-// syncs. Once a remote write lands, reconnect to the surviving id.
-function watchLocalRoomRace() {
+// Two first-opens can mint two UUIDs before pluginData syncs. Once a remote
+// write lands, reconnect to the surviving id. This is the room capability,
+// so it runs for saved and unsaved files alike.
+function watchRoomRace() {
   if (watchingRoomRace) return;
   watchingRoomRace = true;
   figma.on('documentchange', (e: DocumentChangeEvent) => {
-    if (!postedRoomId.startsWith('local:')) return;
+    if (!postedRoomId.startsWith(ROOM_ID_PREFIX)) return;
     let remote = false;
     for (let i = 0; i < e.documentChanges.length; i++) {
       if (e.documentChanges[i].origin === 'REMOTE') {
@@ -108,12 +102,12 @@ export function bootSession(): Promise<void> {
       postedClientId = clientId;
       postedRoomId = resolveRoomId();
       postSession();
-      if (postedRoomId.startsWith('local:')) watchLocalRoomRace();
+      watchRoomRace();
     })
     .catch(() => {
       postedClientId = mintUuid();
       postedRoomId = resolveRoomId();
       postSession();
-      if (postedRoomId.startsWith('local:')) watchLocalRoomRace();
+      watchRoomRace();
     });
 }

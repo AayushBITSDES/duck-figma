@@ -38,7 +38,7 @@ export const state = {
   boardReadAt: 0,
 
   // Survives innerHTML repaints from presence/message/round/reconnect.
-  // Cleared only after the composer submits a contribution.
+  // Cleared only after a contribution is successfully delivered.
   draft: '',
 };
 

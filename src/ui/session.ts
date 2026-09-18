@@ -283,28 +283,51 @@ export function disconnectSession() {
   state.ws = 'off';
 }
 
-async function withBoard<T extends ClientMessage>(build: () => T): Promise<void> {
-  if (state.busy) return;
-  if (state.round.status !== 'collecting') return;
-  if (iHaveActed()) return;
+function markSendFailed() {
+  if (state.banner && state.banner.kind === 'error') return;
+  state.banner = {
+    kind: 'error',
+    text: state.ws === 'live' ? 'Could not send. Try again.' : 'Could not send. Reconnecting...',
+  };
+}
+
+function clearSendFailed() {
+  if (state.banner && state.banner.text.indexOf('Could not send') === 0) {
+    state.banner = null;
+  }
+}
+
+async function withBoard<T extends ClientMessage>(build: () => T): Promise<boolean> {
+  if (state.busy) return false;
+  if (state.round.status !== 'collecting') return false;
+  if (iHaveActed()) return false;
   const roundId = state.round.id;
+  const sock = socket;
   state.busy = true;
   paint();
   await requestBoard();
   if (state.round.id !== roundId || state.round.status !== 'collecting') {
     state.busy = false;
     paint();
-    return;
+    return false;
   }
-  const msg = build();
-  const ok = send(msg);
-  if (ok) state.actedRoundId = roundId;
+  const stillOpen = !!(sock && socket === sock && sock.readyState === WebSocket.OPEN);
+  let ok = false;
+  if (stillOpen) {
+    ok = send(build());
+    if (ok) {
+      state.actedRoundId = roundId;
+      clearSendFailed();
+    }
+  }
+  if (!ok) markSendFailed();
   state.busy = false;
   paint();
+  return ok;
 }
 
-export async function actSetState(mood: Mood) {
-  await withBoard(() => ({
+export async function actSetState(mood: Mood): Promise<boolean> {
+  return withBoard(() => ({
     type: 'set-state',
     roundId: state.round.id,
     mood,
@@ -312,19 +335,27 @@ export async function actSetState(mood: Mood) {
   }));
 }
 
-export async function actContribute(text: string) {
+export async function actContribute(text: string): Promise<boolean> {
   const clipped = text.trim().slice(0, SESSION_LIMITS.maxTextLength);
-  if (!clipped) return;
-  await withBoard(() => ({
+  if (!clipped) return false;
+  const pendingDraft = state.draft || text;
+  const ok = await withBoard(() => ({
     type: 'contribute',
     roundId: state.round.id,
     text: clipped,
     board: clippedBoard(),
   }));
+  if (ok) {
+    state.draft = '';
+  } else {
+    state.draft = pendingDraft;
+    paint();
+  }
+  return ok;
 }
 
-export async function actPass() {
-  await withBoard(() => ({
+export async function actPass(): Promise<boolean> {
+  return withBoard(() => ({
     type: 'pass',
     roundId: state.round.id,
     board: clippedBoard(),

@@ -338,10 +338,10 @@ function wireFooter(kind: Composer, focus?: boolean) {
       if (!ta) return;
       const val = ta.value.trim();
       if (!val) return;
-      state.draft = '';
-      composerFocus = false;
-      ta.value = '';
-      actContribute(val);
+      // Keep the draft until the socket send succeeds. Clearing here loses
+      // the text if the board wait outlives the connection.
+      if (!state.draft) state.draft = ta.value;
+      void actContribute(val);
     };
   }
   const pass = document.getElementById('pass');

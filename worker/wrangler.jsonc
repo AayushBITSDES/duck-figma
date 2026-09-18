@@ -15,11 +15,19 @@
       {
         "name": "ROOM",
         "class_name": "Room"
+      },
+      {
+        "name": "GLOBAL_LIMITER",
+        "class_name": "GlobalLimiter"
       }
     ]
   },
   "exports": {
     "Room": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    },
+    "GlobalLimiter": {
       "type": "durable-object",
       "storage": "sqlite"
     }

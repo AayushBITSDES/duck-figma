@@ -76,4 +76,8 @@ export const SESSION_LIMITS = {
   maxOpenAiCallsPerWindow: 10,
   openAiCallWindowMs: 10 * 60 * 1000,
   maxUnjoinedSockets: 8,
+  // Worker-global OpenAI attempt budget. Opaque room IDs are the room
+  // capability, so inventing rooms must not bypass this demo cap.
+  maxOpenAiCallsGlobalPerWindow: 100,
+  openAiCallGlobalWindowMs: 24 * 60 * 60 * 1000,
 } as const;

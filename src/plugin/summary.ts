@@ -27,16 +27,30 @@ async function loadStickyFonts(sticky: StickyNode): Promise<void> {
   await figma.loadFontAsync(name);
 }
 
+function isOnCurrentPage(node: BaseNode): boolean {
+  let current: BaseNode | null = node;
+  while (current) {
+    if (current.type === 'PAGE') return current === figma.currentPage;
+    current = current.parent;
+  }
+  return false;
+}
+
+// Reuse a remembered or tagged sticky only when it still lives on this page.
 async function findSummarySticky(): Promise<StickyNode | null> {
   const storedId = figma.currentPage.getPluginData(PAGE_SUMMARY_ID_KEY);
   if (storedId) {
     const node = await figma.getNodeByIdAsync(storedId);
-    if (node && !node.removed && node.type === 'STICKY') return node;
+    if (node && !node.removed && node.type === 'STICKY' && isOnCurrentPage(node)) {
+      return node;
+    }
   }
   const tagged = figma.currentPage.findAll((n) => {
     return n.type === 'STICKY' && n.getPluginData(SUMMARY_ROLE_KEY) === SUMMARY_ROLE;
   });
-  if (tagged.length > 0) return tagged[0] as StickyNode;
+  for (const n of tagged) {
+    if (isOnCurrentPage(n)) return n as StickyNode;
+  }
   return null;
 }
 

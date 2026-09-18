@@ -1,8 +1,9 @@
 import { corsPreflight, json, originAllowed, text } from './cors';
+import { GlobalLimiter } from './limiter';
 import { ROOM_ID_RE } from './parse';
 import { Room } from './room';
 
-export { Room };
+export { GlobalLimiter, Room };
 
 function roomStub(env: Env, roomId: string): DurableObjectStub<Room> {
   return env.ROOM.getByName(roomId);

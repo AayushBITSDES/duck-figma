@@ -233,7 +233,7 @@ module.exports = async function run() {
     hub.facilitatorReply = 'Hold that thought.';
     const ada = bootUi(hub);
     const ben = bootUi(hub);
-    const roomId = 'file:abcFileKey';
+    const roomId = 'room:abcFileKey';
     ok('Ada joined the room', await joinSession(ada, {
       roomId, clientId: 'client-ada-01', displayName: 'Ada',
     }));
@@ -307,8 +307,8 @@ module.exports = async function run() {
       ada.root.innerHTML.slice(-400));
 
     const sock = hub.lastSocket();
-    ok('the socket opened the room for this file',
-      !!(sock && /roomId=file%3AabcFileKey|roomId=file:abcFileKey/.test(sock.url)),
+    ok('the socket opened the opaque document room',
+      !!(sock && /roomId=room%3AabcFileKey|roomId=room:abcFileKey/.test(sock.url)),
       sock && sock.url);
   }
 
@@ -319,7 +319,7 @@ module.exports = async function run() {
     const hub = createHub();
     const ui = bootUi(hub);
     await joinSession(ui, {
-      roomId: 'file:md',
+      roomId: 'room:md',
       clientId: 'client-md-01',
       displayName: 'Ada',
     });
@@ -410,9 +410,13 @@ module.exports = async function run() {
         JSON.stringify(types));
       ok('does not post a check-in', types.indexOf('checkin') === -1, JSON.stringify(types));
       const session = posted.filter((p) => p.type === 'session').pop();
-      ok('session is this FigJam file plus the current user',
-        !!(session && session.roomId === 'file:abcFileKey' && session.displayName === 'Ada Lovelace' && session.clientId),
+      const opaqueRoom = figma.root.getPluginData('duckRoomId');
+      ok('session uses an opaque document room, not the file key',
+        !!(session && session.roomId === 'room:' + opaqueRoom && session.roomId.indexOf('abcFileKey') === -1 &&
+          session.displayName === 'Ada Lovelace' && session.clientId),
         JSON.stringify(session));
+      ok('that room token is stored on the document',
+        typeof opaqueRoom === 'string' && opaqueRoom.length > 0, JSON.stringify(opaqueRoom));
       ok('client id is persisted for the next boot',
         typeof store.duckClientId === 'string' && store.duckClientId === session.clientId,
         JSON.stringify(store.duckClientId));
@@ -444,6 +448,54 @@ module.exports = async function run() {
         ok('an absurd resize is clamped, not applied',
           clamped[0] >= 240 && clamped[1] >= 320, JSON.stringify(clamped));
       }
+    }
+  }
+
+  console.log('\n[8] socket loss during board wait keeps the contribution draft');
+  {
+    const hub = createHub();
+    hub.facilitatorReply = 'Round one is in.';
+    const ui = bootUi(hub);
+    ok('Ada joined for a drop-during-send', await joinSession(ui, {
+      roomId: 'room:dropBoard',
+      clientId: 'client-drop-01',
+      displayName: 'Ada',
+    }));
+    const mood = ui.root.querySelector('button[data-m="fine"]') || ui.root.querySelector('button[data-m]');
+    ok('round 1 has a mood to click', mood !== null);
+    if (mood) mood.onclick();
+    const composerReady = await waitUntil(() => ui.root.querySelector('#answer') !== null, 800);
+    ok('round 2 paints a composer', composerReady);
+    const answer = ui.root.querySelector('#answer');
+    if (answer) {
+      answer.value = 'keep this thought';
+      answer.dispatchEvent(new ui.win.Event('input', { bubbles: true }));
+    }
+    const firstSock = hub.lastSocket();
+    const send = ui.root.querySelector('#send');
+    ok('Send is wired', send !== null && firstSock !== null);
+    if (send && firstSock) {
+      send.onclick();
+      firstSock.close();
+      await wait(40);
+      ok('a drop during board wait shows reconnecting',
+        /Reconnecting/.test(ui.root.innerHTML),
+        ui.root.innerHTML.slice(0, 400));
+      ok('and shows that the send did not go through',
+        /Could not send/.test(ui.root.innerHTML),
+        ui.root.innerHTML.slice(-400));
+      const contributed = firstSock.sent.some((raw) => {
+        try { return JSON.parse(raw).type === 'contribute'; } catch (_) { return false; }
+      });
+      ok('and the dropped socket never got contribute', !contributed,
+        JSON.stringify(firstSock.sent));
+      const restored = await waitUntil(() => {
+        const ta = ui.root.querySelector('#answer');
+        return !!(ta && ta.value === 'keep this thought');
+      }, 1200);
+      ok('and the draft returns after reconnect', restored,
+        (ui.root.querySelector('#answer') && ui.root.querySelector('#answer').value) ||
+        ui.root.innerHTML.slice(0, 400));
     }
   }
 };

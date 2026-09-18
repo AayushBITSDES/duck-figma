@@ -166,7 +166,35 @@ module.exports = async function run() {
   el('answer').value = 'ship it';
   el('answer').oninput();
   el('send').onclick();
-  check('submit clears the stored draft', submitted.state.draft, '');
+  check('submit keeps the draft until delivery succeeds', submitted.state.draft, 'ship it');
+  submitted.deliver({ type: 'board-context', board: [] });
+  await new Promise((r) => setTimeout(r, 0));
+  check('successful send then clears the stored draft', submitted.state.draft, '');
+
+  const lost = boot();
+  live(lost, { round: { id: 2, status: 'collecting' } });
+  el('answer').value = 'do not lose this';
+  el('answer').oninput();
+  el('send').onclick();
+  ws.last().close();
+  lost.deliver({ type: 'board-context', board: [] });
+  await new Promise((r) => setTimeout(r, 0));
+  check('socket loss during board wait keeps the draft', lost.state.draft, 'do not lose this');
+  check('and does not count the round as acted', lost.state.actedRoundId, null);
+  check('and shows reconnecting chrome rather than an empty composer', /Reconnecting/.test(html()), true);
+  check('and shows that the send did not go through', /Could not send/.test(html()), true);
+
+  await new Promise((r) => setTimeout(r, 550));
+  ws.last().open();
+  ws.last().incoming({
+    type: 'snapshot',
+    roomId: 'file:abc',
+    you: { clientId: 'client-1' },
+    participants: [{ clientId: 'client-1', displayName: 'Ada', status: 'pending' }],
+    messages: [],
+    round: { id: 2, status: 'collecting' },
+  });
+  check('coming back live restores the unsent contribution', el('answer').value, 'do not lose this');
 
   // --- Update summary posts the last facilitator turn -----------------------
   const summary = boot();

@@ -49,6 +49,7 @@ function makeFigma(opts) {
   let nextStickyId = 1;
 
   const page = {
+    type: 'PAGE',
     findAll: (pred) => (typeof pred === 'function' ? nodes.filter(pred) : nodes.slice()),
     selection: [],
     getPluginData: (k) => pageData[k] || '',
@@ -78,7 +79,7 @@ function makeFigma(opts) {
       deleteAsync: async (k) => { delete store[k]; },
     },
     createSticky: () => {
-      const sticky = makeSticky('s' + nextStickyId++);
+      const sticky = makeSticky('s' + nextStickyId++, { parent: page });
       stickies.push(sticky);
       nodes.push(sticky);
       nodeById[sticky.id] = sticky;
@@ -150,24 +151,35 @@ module.exports = async function run() {
     currentUser: { name: 'Ada Lovelace' },
     store: { duckClientId: 'client-01' },
   });
-  check('a file key becomes the room id', sess.resolveRoomId(), 'file:FigFileKey');
-  check('and does not mint pluginData when a file key exists', env.rootData.duckRoomId, undefined);
+  const firstRoom = sess.resolveRoomId();
+  const mintedDespiteFileKey = env.rootData.duckRoomId;
+  check('a file key still mints opaque pluginData', typeof mintedDespiteFileKey, 'string');
+  check('and the room id is that token, not the file key', firstRoom, 'room:' + mintedDespiteFileKey);
+  check('and the guessable file key is not in the room id', firstRoom.indexOf('FigFileKey') === -1, true);
   check('current user is the display name', sess.displayName(), 'Ada Lovelace');
   await sess.bootSession();
-  check('boot posts file-scoped identity', env.sent.filter((m) => m.type === 'session').pop(), {
+  check('boot posts the opaque document-scoped room', env.sent.filter((m) => m.type === 'session').pop(), {
     type: 'session',
-    roomId: 'file:FigFileKey',
+    roomId: 'room:' + mintedDespiteFileKey,
     clientId: 'client-01',
     displayName: 'Ada Lovelace',
   });
   check('and reuses the stored client id', env.store.duckClientId, 'client-01');
 
   ({ env, mod: sess } = loadPlugin('session', {
+    fileKey: 'FigFileKey',
     rootData: { duckRoomId: 'already-minted' },
     currentUser: { name: '   ' },
   }));
-  check('without a file key, document pluginData is the room', sess.resolveRoomId(), 'local:already-minted');
+  check('teammates share the stored pluginData even when a file key exists',
+    sess.resolveRoomId(), 'room:already-minted');
+  check('and still do not use the file key', sess.resolveRoomId().indexOf('FigFileKey') === -1, true);
   check('a blank current user falls back to Anonymous', sess.displayName(), 'Anonymous');
+
+  ({ env, mod: sess } = loadPlugin('session', {
+    rootData: { duckRoomId: 'already-minted' },
+  }));
+  check('without a file key, document pluginData is still the room', sess.resolveRoomId(), 'room:already-minted');
 
   ({ env, mod: sess } = loadPlugin('session', {
     currentUser: { name: 'A'.repeat(80) },
@@ -175,9 +187,9 @@ module.exports = async function run() {
   check('an overlong display name is clipped to 40', sess.displayName().length, 40);
   await sess.bootSession();
   const minted = env.rootData.duckRoomId;
-  check('a first open of an unsaved file mints pluginData', typeof minted, 'string');
-  check('and posts a local room id', env.sent.filter((m) => m.type === 'session').pop().roomId, 'local:' + minted);
-  check('a second resolve reuses that id', sess.resolveRoomId(), 'local:' + minted);
+  check('a first open mints pluginData', typeof minted, 'string');
+  check('and posts a room-prefixed id', env.sent.filter((m) => m.type === 'session').pop().roomId, 'room:' + minted);
+  check('a second resolve reuses that id', sess.resolveRoomId(), 'room:' + minted);
 
   ({ env, mod: sess } = loadPlugin('session', {}));
   Object.defineProperty(env.figma, 'currentUser', {
@@ -195,12 +207,15 @@ module.exports = async function run() {
   await sess.bootSession();
   check('a stored client id with spaces is rejected', env.store.duckClientId === 'spaces not ok', false);
 
-  const race = bootPlugin({ duckClientId: 'client-01' }, { rootData: { duckRoomId: 'aaa' } });
+  const race = bootPlugin({ duckClientId: 'client-01' }, {
+    fileKey: 'FileA',
+    rootData: { duckRoomId: 'aaa' },
+  });
   await settled();
-  check('code.ts posts the local fallback room on boot', race.session().roomId, 'local:aaa');
+  check('code.ts posts the opaque room on boot, not the file key', race.session().roomId, 'room:aaa');
   race.rootData.duckRoomId = 'bbb';
   race.edit('REMOTE');
-  check('a remote pluginData write switches the posted room', race.session().roomId, 'local:bbb');
+  check('a remote pluginData write switches the posted room', race.session().roomId, 'room:bbb');
   const sessionPosts = race.sent.filter((m) => m.type === 'session').length;
   race.edit('LOCAL');
   check('a local documentchange does not rebroadcast session',
@@ -209,14 +224,17 @@ module.exports = async function run() {
   const named = bootPlugin({ duckClientId: 'client-99' }, {
     fileKey: 'FileA',
     currentUser: { name: 'Grace' },
+    rootData: { duckRoomId: 'shared-token' },
   });
   await settled();
-  check('code.ts posts file key, client id, and current user together', named.session(), {
+  check('code.ts posts opaque room, client id, and current user together', named.session(), {
     type: 'session',
-    roomId: 'file:FileA',
+    roomId: 'room:shared-token',
     clientId: 'client-99',
     displayName: 'Grace',
   });
+  check('and leaves the guessable file key out of the room id',
+    named.session().roomId.indexOf('FileA') === -1, true);
 
   // --- no activeUsers / motion / idle ---------------------------------------
   const pluginSrc = ['code', 'session', 'board', 'summary', 'window']
@@ -293,6 +311,52 @@ module.exports = async function run() {
   check('and notifies an update, not a drop', sumEnv.notifies[sumEnv.notifies.length - 1],
     'Updated the session summary.');
   living.x = createdX;
+
+  ({ env: sumEnv, mod: summary } = loadPlugin('summary', { cx: 100, cy: 200 }));
+  const otherPage = { type: 'PAGE' };
+  const moved = makeSticky('moved-off-page', { parent: otherPage });
+  moved.setPluginData('duckRole', 'session-summary');
+  moved.name = 'Session Summary';
+  moved.text.characters = 'Left behind';
+  sumEnv.nodeById[moved.id] = moved;
+  sumEnv.pageData.duckSummaryNodeId = moved.id;
+  await summary.updateSummary('Stays on this page');
+  check('a remembered sticky on another page is not updated', moved.text.characters, 'Left behind');
+  check('and a new summary is created on the current page', sumEnv.stickies.length, 1);
+  check('with the new text', sumEnv.stickies[0].text.characters, 'Stays on this page');
+  check('and the page now remembers the on-page sticky', sumEnv.pageData.duckSummaryNodeId, sumEnv.stickies[0].id);
+
+  ({ env: sumEnv, mod: summary } = loadPlugin('summary'));
+  const strayPage = { type: 'PAGE' };
+  const stray = makeSticky('stray-off-page', { parent: strayPage });
+  stray.setPluginData('duckRole', 'session-summary');
+  stray.text.characters = 'Other page';
+  sumEnv.nodeById[stray.id] = stray;
+  sumEnv.pageData.duckSummaryNodeId = stray.id;
+  const onPage = makeSticky('already-here', { parent: sumEnv.figma.currentPage });
+  onPage.setPluginData('duckRole', 'session-summary');
+  onPage.name = 'Session Summary';
+  onPage.text.characters = 'Here already';
+  sumEnv.nodes.push(onPage);
+  sumEnv.nodeById[onPage.id] = onPage;
+  await summary.updateSummary('Updated here');
+  check('an off-page remembered id falls through to the tagged sticky on this page',
+    [stray.text.characters, onPage.text.characters, sumEnv.stickies.length],
+    ['Other page', 'Updated here', 0]);
+  check('and remembers the on-page sticky', sumEnv.pageData.duckSummaryNodeId, onPage.id);
+
+  ({ env: sumEnv, mod: summary } = loadPlugin('summary'));
+  const section = { type: 'SECTION', parent: sumEnv.figma.currentPage };
+  const nested = makeSticky('nested-on-page', { parent: section });
+  nested.setPluginData('duckRole', 'session-summary');
+  nested.name = 'Session Summary';
+  nested.text.characters = 'Inside a section';
+  sumEnv.nodes.push(nested);
+  sumEnv.nodeById[nested.id] = nested;
+  sumEnv.pageData.duckSummaryNodeId = nested.id;
+  await summary.updateSummary('Still nested');
+  check('a nested sticky on the current page is reused', sumEnv.stickies.length, 0);
+  check('and updated in place', nested.text.characters, 'Still nested');
 
   ({ env: sumEnv, mod: summary } = loadPlugin('summary'));
   sumEnv.figma.createSticky = () => { throw new Error('no stickies'); };

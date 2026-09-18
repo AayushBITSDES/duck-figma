@@ -2,7 +2,7 @@ import type { ChatMessage, ClientMessage, ServerMessage } from '../../src/shared
 import { exports } from 'cloudflare:workers';
 
 export function roomId(label: string): string {
-  return 'file:' + label + '-' + crypto.randomUUID();
+  return 'room:' + label + '-' + crypto.randomUUID();
 }
 
 export async function openSocket(

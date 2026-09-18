@@ -70,7 +70,7 @@ function wire(opts) {
   }, options.store || {});
   const resizes = [];
   const stickies = [];
-  const rootData = {};
+  const rootData = options.rootData || {};
   const pageData = {};
   let uiHandler = null;
 
@@ -324,8 +324,9 @@ module.exports = async function run() {
   {
     const hub = createHub();
     hub.facilitatorReply = 'Two heads.';
-    const a = wire({ hub, clientId: 'client-ada-sync1', displayName: 'Ada', fileKey: 'syncFile' });
-    const b = wire({ hub, clientId: 'client-ben-sync1', displayName: 'Ben', fileKey: 'syncFile' });
+    const sharedRoot = { duckRoomId: 'sync-shared-room' };
+    const a = wire({ hub, clientId: 'client-ada-sync1', displayName: 'Ada', fileKey: 'syncFile', rootData: sharedRoot });
+    const b = wire({ hub, clientId: 'client-ben-sync1', displayName: 'Ben', fileKey: 'syncFile', rootData: sharedRoot });
     ok('Ada\'s panel joined', await waitForSession(a.doc));
     ok('Ben\'s panel joined', await waitForSession(b.doc));
     await waitUntil(() => /Ben/.test(a.doc.body.innerHTML) && /Ada/.test(b.doc.body.innerHTML));

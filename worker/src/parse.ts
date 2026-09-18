@@ -4,7 +4,7 @@ import { SESSION_LIMITS } from '../../src/shared/protocol';
 const MOODS: ReadonlySet<Mood> = new Set(['stuck', 'frustrated', 'thinking', 'fine']);
 const CLIENT_ID_RE = /^[A-Za-z0-9-]{8,64}$/;
 
-export const ROOM_ID_RE = /^(file|local):[A-Za-z0-9._:-]{1,128}$/;
+export const ROOM_ID_RE = /^room:[A-Za-z0-9._:-]{1,128}$/;
 
 export type ParseResult =
   | { ok: true; value: ClientMessage }

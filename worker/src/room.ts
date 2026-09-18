@@ -10,8 +10,11 @@ import type {
   ServerMessage,
 } from '../../src/shared/protocol';
 import { SESSION_LIMITS } from '../../src/shared/protocol';
+import { GLOBAL_LIMITER_INSTANCE } from './limiter';
 import { completeFacilitator } from './openai';
 import { parseClientMessage, sanitizeDisplayName } from './parse';
+
+const GLOBAL_OPENAI_CAP_MESSAGE = 'The facilitator is at its demo limit. Try again later.';
 
 const FACILITATOR_AUTHOR = { clientId: 'facilitator', displayName: 'Duck' } as const;
 const JOIN_TIMEOUT_MS = 5_000;
@@ -302,6 +305,12 @@ export class Room extends DurableObject<Env> {
       this.sendError(ws, 'session_cap', 'This session has reached its facilitator limit.');
       return;
     }
+    this.facilitating = true;
+    if (!(await this.consumeGlobalOpenAiAttempt())) {
+      this.facilitating = false;
+      this.sendError(ws, 'rate_limited', GLOBAL_OPENAI_CAP_MESSAGE);
+      return;
+    }
     this.record.round.status = 'thinking';
     this.saveRecord();
     this.broadcast({ type: 'round', round: this.record.round });
@@ -321,6 +330,12 @@ export class Room extends DurableObject<Env> {
       this.failRound('session_cap', 'This session has reached its facilitator limit.');
       return;
     }
+    this.facilitating = true;
+    if (!(await this.consumeGlobalOpenAiAttempt())) {
+      this.facilitating = false;
+      this.failRound('rate_limited', GLOBAL_OPENAI_CAP_MESSAGE);
+      return;
+    }
     this.record.round.status = 'thinking';
     this.saveRecord();
     this.broadcast({ type: 'round', round: this.record.round });
@@ -328,8 +343,6 @@ export class Room extends DurableObject<Env> {
   }
 
   private async runFacilitator(): Promise<void> {
-    if (this.facilitating) return;
-    this.facilitating = true;
     try {
       if (!this.openAiBudgetOk()) {
         this.failRound('session_cap', 'This session has reached its facilitator limit.');
@@ -422,6 +435,14 @@ export class Room extends DurableObject<Env> {
 
   private openAiBudgetOk(): boolean {
     return this.openAiAttemptsInWindow().length < SESSION_LIMITS.maxOpenAiCallsPerWindow;
+  }
+
+  private async consumeGlobalOpenAiAttempt(): Promise<boolean> {
+    try {
+      return await this.env.GLOBAL_LIMITER.getByName(GLOBAL_LIMITER_INSTANCE).tryConsume();
+    } catch {
+      return false;
+    }
   }
 
   private recordOpenAiAttempt(): void {
