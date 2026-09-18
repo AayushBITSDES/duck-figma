@@ -1,4 +1,4 @@
-import { idleDuck } from './screens';
+import { showConnecting } from './screens';
 import { post } from './bridge';
 import { state } from './state';
 import './bridge';
@@ -42,4 +42,4 @@ if (grip) {
   grip.addEventListener('pointercancel', stop);
 }
 
-idleDuck();
+showConnecting();

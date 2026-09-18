@@ -23,12 +23,23 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            worker/package-lock.json
 
-      - name: Install
+      - name: Install plugin dependencies
         run: npm ci
 
-      - name: Test
+      - name: Install Worker dependencies
+        run: npm ci --prefix worker
+
+      - name: Test plugin source
         run: npm test
+
+      - name: Test and typecheck Worker
+        run: |
+          npm run test:worker
+          npm run typecheck:worker
 
       - name: Build
         run: npm run build

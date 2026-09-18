@@ -1,10 +1,10 @@
 /*
  * Runs against the COMPILED output in .test-build, not a reimplementation.
  *
- * Covers the two transforms applied to a model's reply on its way to the
- * screen: the markdown renderer in ui/render.js, and the dash normalizer in
- * ui/api.js. Both take untrusted text from a remote API, so the markdown
- * cases that matter most are the ones asserting what does NOT come out.
+ * Covers the two transforms applied to facilitator text on its way to the
+ * screen: the markdown renderer and the dash normalizer in ui/render.js.
+ * Both take untrusted text from a remote API, so the markdown cases that
+ * matter most are the ones asserting what does NOT come out.
  */
 const path = require('path');
 const { check } = require('./lib/check');
@@ -14,8 +14,7 @@ const dom = require('./lib/dom');
 module.exports = async function run() {
   dom.install();
   clearBuildCache();
-  const { renderMarkdown } = require(path.join(BUILD, 'ui', 'render'));
-  const { stripDashes, emptyReason } = require(path.join(BUILD, 'ui', 'api'));
+  const { renderMarkdown, stripDashes } = require(path.join(BUILD, 'ui', 'render'));
 
   check('markdown: bold', renderMarkdown('**bold**'), '<p><strong>bold</strong></p>');
   check('markdown: italic', renderMarkdown('*it*'), '<p><em>it</em></p>');
@@ -79,13 +78,4 @@ module.exports = async function run() {
   check('dashes: a dash inside a fenced code block is left alone',
     stripDashes('```js\nconst gap = a — b\nlet x = 1\n—y\n```'),
     '```js\nconst gap = a — b\nlet x = 1\n—y\n```');
-
-  // A 200 with message.refusal and no content is the model declining, not the
-  // plugin malfunctioning, so say what it actually said.
-  check('a refusal is shown rather than reported as an empty reply',
-    emptyReason({ choices: [{ message: { refusal: 'I cannot help with that.' } }] }),
-    'I cannot help with that.');
-  check('a genuinely empty reply still reads as empty',
-    emptyReason({ choices: [{ message: {} }] }),
-    'The API answered, but with nothing in it. Try again?');
 };

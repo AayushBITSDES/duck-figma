@@ -9,143 +9,230 @@
  */
 const path = require('path');
 const { check } = require('./lib/check');
-const { BUILD, clearBuildCache } = require('./lib/fresh');
+const { BUILD, clearBuildCache, clearPendingTimers } = require('./lib/fresh');
 const dom = require('./lib/dom');
+const ws = require('./lib/ws');
 
 function boot() {
+  clearPendingTimers();
+  ws.reset();
+  dom.posted.length = 0;
   clearBuildCache();
   const stateMod = require(path.join(BUILD, 'ui', 'state'));
   const screens = require(path.join(BUILD, 'ui', 'screens'));
-  screens.idleDuck(); // mirrors what the real ui.ts entry point does at boot
+  screens.showConnecting(); // mirrors what the real ui.ts entry point does at boot
   return {
     state: stateMod.state,
     openSettings: screens.openSettings,
-    idleDuck: screens.idleDuck,
-    showCheckIn: screens.showCheckIn,
-    sendUserText: screens.sendUserText,
+    showConnecting: screens.showConnecting,
+    showSession: screens.showSession,
     deliver: (m) => global.window.onmessage({ data: { pluginMessage: m } }),
   };
 }
 
+function html() {
+  return dom.el('root').innerHTML;
+}
+
+function live(b, extra) {
+  b.deliver({ type: 'session', roomId: 'file:abc', clientId: 'client-1', displayName: 'Ada' });
+  const sock = ws.last();
+  sock.open();
+  sock.incoming(Object.assign({
+    type: 'snapshot',
+    roomId: 'file:abc',
+    you: { clientId: 'client-1' },
+    participants: [{ clientId: 'client-1', displayName: 'Ada', status: 'pending' }],
+    messages: [],
+    round: { id: 1, status: 'collecting' },
+  }, extra || {}));
+  return sock;
+}
+
 module.exports = async function run() {
   dom.install();
+  ws.install();
   const el = dom.el;
 
-  // --- Settings ---------------------------------------------------------
+  // --- Boot paints an explicit connecting session, not an idle duck ---------
+  const start = boot();
+  check('boot reports connecting, not idle', start.state.mode, 'connecting');
+  check('and says it is joining this board\'s session',
+    html().indexOf('Joining this board') > -1, true);
+
+  // --- Settings is text size only ------------------------------------------
   const set = boot();
-  set.deliver({ type: 'settings', settings: { provider: 'openrouter', key: 'sk-or-saved' } });
   set.openSettings();
-  el('key-input').value = 'typed-then-abandoned';
-  el('back').onclick();
-  check('Back discards an edited key', [set.state.storedKey, set.state.mode], ['sk-or-saved', 'idle']);
+  const setHtml = html();
+  check('settings offers text size', setHtml.indexOf('id="text-size"') > -1, true);
+  check('and no provider, key, or save controls',
+    [setHtml.indexOf('id="provider"') > -1, setHtml.indexOf('id="key-input"') > -1, setHtml.indexOf('id="save"') > -1],
+    [false, false, false]);
+  check('opening settings reports settings',
+    dom.posted.filter((m) => m.type === 'mode').pop(), { type: 'mode', mode: 'settings' });
 
-  set.openSettings();
-  el('provider').value = 'anthropic';
-  el('provider').onchange();
-  check('switching provider clears the key field, since only one is kept', el('key-input').value, '');
-  el('provider').value = 'openrouter';
-  el('provider').onchange();
-  check('switching back brings the saved key into view', el('key-input').value, 'sk-or-saved');
-
-  el('provider').value = 'google';
-  el('provider').onchange();
-  el('key-input').value = 'AIza-new';
-  dom.posted.length = 0;
-  el('save').onclick();
-  const saved = dom.posted.filter((m) => m.type === 'save-settings').pop();
-  check('Save sends the whole of the settings', [saved.provider, saved.key], ['google', 'AIza-new']);
-  check('and applies them', [set.state.provider, set.state.storedKey, set.state.mode], ['google', 'AIza-new', 'idle']);
-
-  // Opening settings before startup finishes must not seed an empty key and
-  // let Save wipe the real one.
-  const early = boot();
-  early.openSettings();
-  const earlyHtml = el('root').innerHTML;
-  check('settings opened before load waits, with nothing to Save',
-    [earlyHtml.indexOf('Loading') > -1, earlyHtml.indexOf('id="save"') > -1], [true, false]);
-  early.deliver({ type: 'settings', settings: { provider: 'anthropic', key: 'sk-ant-saved' } });
-  check('and seeds itself once the settings arrive',
-    [el('provider').value, el('key-input').value], ['anthropic', 'sk-ant-saved']);
-
-  // --- An in-flight reply must not repaint over another screen --------------
-  const stomp = boot();
-  stomp.deliver({ type: 'settings', settings: { provider: 'openrouter', key: 'sk-or' } });
-  stomp.state.messages = [];
-  const reply = stomp.sendUserText('still there?');
-  check('the panel shows thinking while a reply is expected', stomp.state.loading, true);
-  stomp.idleDuck();
-  stomp.openSettings();
-  stomp.deliver({ type: 'board-context', board: [] });
-  await reply;
-  check('a reply landing elsewhere does not repaint over settings', stomp.state.mode, 'settings');
-
-  // Losing the key mid-send used to leave the panel stuck on "thinking...".
-  const wedge = boot();
-  wedge.deliver({ type: 'settings', settings: { provider: 'openrouter', key: 'sk-or' } });
-  wedge.state.messages = [];
-  const inflight = wedge.sendUserText('are you there');
-  wedge.deliver({ type: 'settings', settings: { provider: 'openrouter', key: '' } });
-  wedge.deliver({ type: 'board-context', board: [] });
-  await inflight;
-  check('losing the key mid-send falls back instead of hanging on thinking',
-    [wedge.state.loading, wedge.state.messages.length], [false, 2]);
-
-  // --- A paste into the settings form must survive a repaint that has ------
-  // --- nothing to do with the key -------------------------------------------
-  const size = boot();
-  size.deliver({ type: 'settings', settings: { provider: 'openrouter', key: '' } });
-  size.openSettings();
-  el('key-input').value = 'pasted-key';
-  el('key-input').oninput();
   el('text-size').value = '14';
-  el('text-size').onchange();
   dom.posted.length = 0;
-  el('save').onclick();
-  const sizeSaved = dom.posted.filter((m) => m.type === 'save-settings').pop();
-  check('a text size change does not discard a pasted key', sizeSaved.key, 'pasted-key');
+  el('text-size').onchange();
+  check('changing text size posts it to the plugin',
+    dom.posted.filter((m) => m.type === 'text-size').pop(), { type: 'text-size', size: 14 });
 
-  // Collapsing rebuilds #root from scratch (see showCollapsed()), which used
-  // to lose the same draft a different way: repaint() re-ran openSettings(),
-  // which reseeds the draft from storage rather than the in-progress edit.
-  const collapseSettings = boot();
-  collapseSettings.deliver({ type: 'settings', settings: { provider: 'openrouter', key: '' } });
-  collapseSettings.openSettings();
-  el('key-input').value = 'pasted-key';
-  el('key-input').oninput();
-  collapseSettings.deliver({ type: 'window', minimized: true });
-  collapseSettings.deliver({ type: 'window', minimized: false });
-  check('a pasted key survives collapsing and expanding the panel', el('key-input').value, 'pasted-key');
+  el('back').onclick();
+  check('Back from settings returns to connecting when no snapshot has landed',
+    set.state.mode, 'connecting');
 
-  // --- render() swallows a paint while collapsed; the caller must not then -
-  // --- reach into a screen that was never painted ---------------------------
-  const resumeCollapsed = boot();
-  resumeCollapsed.showCheckIn();
-  resumeCollapsed.deliver({ type: 'window', minimized: true });
-  let resumeThrew = false;
+  const sized = boot();
+  sized.deliver({ type: 'window', width: 280, height: 380, minimized: false, textSize: 16 });
+  sized.openSettings();
+  check('settings show the saved text size', el('text-size').value, '16');
+
+  // --- Explicit session UI --------------------------------------------------
+  const session = boot();
+  live(session);
+  check('a snapshot paints the session screen', session.state.mode, 'session');
+  check('round one offers the four mood buttons',
+    ['mood-stuck', 'mood-frustrated', 'mood-thinking', 'mood-fine']
+      .every((id) => html().indexOf('id="' + id + '"') > -1), true);
+  check('and names this participant', html().indexOf('Ada (you)') > -1, true);
+  check('entering the session reports session',
+    dom.posted.filter((m) => m.type === 'mode').pop(), { type: 'mode', mode: 'session' });
+
+  const later = boot();
+  live(later, { round: { id: 2, status: 'collecting' } });
+  const laterHtml = html();
+  check('later rounds offer a composer and Pass',
+    [laterHtml.indexOf('id="answer"') > -1, laterHtml.indexOf('id="pass"') > -1, laterHtml.indexOf('id="send"') > -1],
+    [true, true, true]);
+
+  // --- An in-progress contribution survives live session frames ------------
+  const draft = boot();
+  live(draft, { round: { id: 2, status: 'collecting' } });
+  el('answer').value = 'half a thought';
+  el('answer').selectionStart = 4;
+  el('answer').selectionEnd = 7;
+  el('answer').oninput();
+  global.document.activeElement = el('answer');
+  check('typing stores the draft in session state', draft.state.draft, 'half a thought');
+
+  ws.last().incoming({
+    type: 'presence',
+    participants: [
+      { clientId: 'client-1', displayName: 'Ada', status: 'pending' },
+      { clientId: 'client-2', displayName: 'Grace', status: 'pending' },
+    ],
+  });
+  check('incoming presence does not erase the draft', draft.state.draft, 'half a thought');
+  check('and the composer still shows it', el('answer').value, 'half a thought');
+  check('and restores the caret', [el('answer').selectionStart, el('answer').selectionEnd], [4, 7]);
+  check('and still names the new arrival', html().indexOf('Grace') > -1, true);
+
+  ws.last().incoming({
+    type: 'message',
+    message: {
+      id: 'm-peer', at: 3, kind: 'system',
+      author: { clientId: 'sys', displayName: 'Duck' },
+      text: 'Grace joined',
+    },
+  });
+  check('incoming message does not erase the draft', draft.state.draft, 'half a thought');
+  check('and the composer still holds the typed text', el('answer').value, 'half a thought');
+  check('and the caret is still where it was', [el('answer').selectionStart, el('answer').selectionEnd], [4, 7]);
+
+  ws.last().incoming({ type: 'round', round: { id: 2, status: 'collecting' } });
+  check('a live round frame keeps the in-progress contribution', el('answer').value, 'half a thought');
+
+  ws.last().close();
+  check('reconnect keeps the draft in state', draft.state.draft, 'half a thought');
+  check('and shows reconnecting chrome rather than an empty composer', /Reconnecting/.test(html()), true);
+
+  await new Promise((r) => setTimeout(r, 550));
+  ws.last().open();
+  ws.last().incoming({
+    type: 'snapshot',
+    roomId: 'file:abc',
+    you: { clientId: 'client-1' },
+    participants: [
+      { clientId: 'client-1', displayName: 'Ada', status: 'pending' },
+      { clientId: 'client-2', displayName: 'Grace', status: 'pending' },
+    ],
+    messages: [],
+    round: { id: 2, status: 'collecting' },
+  });
+  check('coming back live restores the in-progress contribution', el('answer').value, 'half a thought');
+  check('and the caret after reconnect', [el('answer').selectionStart, el('answer').selectionEnd], [4, 7]);
+
+  const submitted = boot();
+  live(submitted, { round: { id: 2, status: 'collecting' } });
+  el('answer').value = 'ship it';
+  el('answer').oninput();
+  el('send').onclick();
+  check('submit clears the stored draft', submitted.state.draft, '');
+
+  // --- Update summary posts the last facilitator turn -----------------------
+  const summary = boot();
+  live(summary, {
+    messages: [{
+      id: 'f1', at: 1, kind: 'facilitator',
+      author: { clientId: 'duck', displayName: 'Duck' },
+      text: 'Try grouping the nav.',
+    }],
+  });
+  check('a facilitator turn enables Update summary', /id="summary"[^>]*disabled/.test(html()), false);
+  dom.posted.length = 0;
+  el('summary').onclick();
+  check('Update summary posts the last facilitator text',
+    dom.posted.filter((m) => m.type === 'update-summary').pop(), {
+      type: 'update-summary',
+      text: 'Try grouping the nav.',
+    });
+
+  summary.deliver({ type: 'summary-updated', nodeId: 's1' });
+  check('a successful upsert tells the session the board changed',
+    summary.state.banner && summary.state.banner.kind, 'info');
+
+  summary.deliver({ type: 'summary-error', message: 'Could not write that sticky.' });
+  check('a failed upsert surfaces the plugin error',
+    summary.state.banner && summary.state.banner.text, 'Could not write that sticky.');
+
+  const noFacilitator = boot();
+  live(noFacilitator);
+  check('with no facilitator turn the summary action is disabled',
+    html().indexOf('id="summary" class="ghost" disabled') > -1, true);
+  dom.posted.length = 0;
+  el('summary').onclick();
+  check('and clicking it posts nothing',
+    dom.posted.filter((m) => m.type === 'update-summary').length, 0);
+
+  // --- Settings from the session returns to the session ---------------------
+  const roundTrip = boot();
+  live(roundTrip);
+  el('settings').onclick();
+  check('session settings is still text-size only', html().indexOf('id="text-size"') > -1, true);
+  el('back').onclick();
+  check('Back from settings returns to the live session', roundTrip.state.mode, 'session');
+
+  // --- A paint while collapsed must not reach into an unpainted screen ------
+  const collapsed = boot();
+  live(collapsed);
+  collapsed.deliver({ type: 'window', minimized: true });
+  let threw = false;
   try {
-    resumeCollapsed.deliver({ type: 'resume' });
+    ws.last().incoming({
+      type: 'message',
+      message: {
+        id: 'm9', at: 9, kind: 'system',
+        author: { clientId: 'sys', displayName: 'Duck' },
+        text: 'Grace joined',
+      },
+    });
   } catch (e) {
-    resumeThrew = true;
+    threw = true;
   }
-  check('resuming while collapsed does not throw reaching into an unpainted idle screen', resumeThrew, false);
-  check('the duck still stands down to idle underneath', resumeCollapsed.state.mode, 'idle');
+  check('a session frame while collapsed does not throw reaching into an unpainted thread', threw, false);
 
-  // A reply landing after the user collapsed mid-send used to throw from
-  // inside renderChat() as an unhandled rejection, since nothing awaits
-  // sendUserText() from its real caller (the Send button's onclick).
-  const replyCollapsed = boot();
-  replyCollapsed.deliver({ type: 'settings', settings: { provider: 'openrouter', key: 'sk-or' } });
-  replyCollapsed.state.messages = [];
-  const sendWhileCollapsing = replyCollapsed.sendUserText('are you there');
-  replyCollapsed.deliver({ type: 'window', minimized: true });
-  replyCollapsed.deliver({ type: 'board-context', board: [] });
-  let replyThrew = false;
-  try {
-    await sendWhileCollapsing;
-  } catch (e) {
-    replyThrew = true;
-  }
-  check('a reply landing while collapsed does not throw reaching into an unpainted thread', replyThrew, false);
+  collapsed.deliver({ type: 'window', minimized: false });
+  check('expanding repaints the session rather than the connecting screen',
+    collapsed.state.mode, 'session');
 
   // --- The resize grip must not stay live behind the collapsed duck --------
   // ui.html hides #grip with `body.min #grip`, since #grip lives outside
@@ -159,28 +246,15 @@ module.exports = async function run() {
   check('expanding clears it again', dom.body.classList.contains('min'), false);
 
   // --- Every screen change reports itself to the plugin --------------------
-  // The plugin cannot see which screen is up, and expandForCheckIn refuses to
-  // pop the panel open unless it has been told the UI is idle. So if these
-  // stop being posted, a collapsed duck goes quiet: the check-in still fires,
-  // the window never opens, and nobody sees the question. That failure is
-  // invisible on the plugin side, which is why it is pinned here.
   const modes = boot();
   dom.posted.length = 0;
-  modes.showCheckIn();
-  check('entering the check-in reports checkin', dom.posted.filter((m) => m.type === 'mode').pop(), {
+  modes.showConnecting();
+  check('the connecting screen reports connecting', dom.posted.filter((m) => m.type === 'mode').pop(), {
     type: 'mode',
-    mode: 'checkin',
+    mode: 'connecting',
   });
 
   dom.posted.length = 0;
-  modes.idleDuck();
-  check('going back to rest reports idle', dom.posted.filter((m) => m.type === 'mode').pop(), {
-    type: 'mode',
-    mode: 'idle',
-  });
-
-  dom.posted.length = 0;
-  modes.deliver({ type: 'settings', settings: { provider: 'openrouter', key: 'sk-or-saved' } });
   modes.openSettings();
   check('opening settings reports settings', dom.posted.filter((m) => m.type === 'mode').pop(), {
     type: 'mode',

@@ -1,6 +1,6 @@
+import { connectSession } from './session';
+import { paintSession, repaint, showCollapsed } from './screens';
 import { state } from './state';
-import { PROVIDERS, ProviderId } from './providers';
-import { idleDuck, showCheckIn, openSettings, showCollapsed, repaint } from './screens';
 
 // One CSS variable drives the whole panel: every control already inherits its
 // font, so nothing else has to know the size changed.
@@ -13,8 +13,8 @@ export function post(msg: any) {
   parent.postMessage({ pluginMessage: msg }, '*');
 }
 
-// Asks code.ts for a fresh board snapshot and waits for it, so a reply never
-// quotes a board that has moved on. Resolves anyway if the reply never lands.
+// Asks code.ts for a fresh board snapshot and waits for it, so a contribution
+// never quotes a board that has moved on. Resolves anyway if the reply never lands.
 let boardWaiters: Array<() => void> = [];
 export function requestBoard(): Promise<void> {
   post({ type: 'get-board' });
@@ -34,11 +34,9 @@ export function requestBoard(): Promise<void> {
 window.onmessage = (event) => {
   const msg = event.data.pluginMessage;
   if (!msg) return;
-  if (msg.type === 'checkin') {
-    state.boardItems = Array.isArray(msg.board) ? msg.board : [];
-    state.boardReadAt = Date.now();
-    // Only interrupt the resting duck: never wipe a chat or a half-typed key.
-    if (state.mode === 'idle') showCheckIn();
+  if (msg.type === 'session') {
+    connectSession(msg.roomId || '', msg.clientId || '', msg.displayName || '');
+    requestBoard();
   }
   if (msg.type === 'board-context') {
     state.boardItems = Array.isArray(msg.board) ? msg.board : [];
@@ -47,8 +45,6 @@ window.onmessage = (event) => {
     boardWaiters = [];
     waiters.forEach((w) => w());
   }
-  // Back to work: stand down only if the duck is still just asking.
-  if (msg.type === 'resume' && state.mode === 'checkin') idleDuck();
   // The plugin owns window state, since it is the only side that can call
   // figma.ui.resize. We follow what it reports rather than tracking our own,
   // so a clamp applied over there can never leave the two disagreeing.
@@ -64,11 +60,12 @@ window.onmessage = (event) => {
     if (state.minimized && !was) showCollapsed();
     else if (!state.minimized && was) repaint();
   }
-  if (msg.type === 'settings') {
-    const settings = msg.settings || {};
-    if (PROVIDERS[settings.provider as ProviderId]) state.provider = settings.provider;
-    state.storedKey = settings.key || '';
-    state.settingsLoaded = true;
-    if (state.mode === 'settings') openSettings();
+  if (msg.type === 'summary-updated') {
+    state.banner = { kind: 'info', text: 'Summary updated on the board.' };
+    paintSession();
+  }
+  if (msg.type === 'summary-error') {
+    state.banner = { kind: 'error', text: msg.message || 'Could not update the summary.' };
+    paintSession();
   }
 };

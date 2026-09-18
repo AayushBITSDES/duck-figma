@@ -6,7 +6,10 @@
     "build": "webpack --mode=production",
     "watch": "webpack --mode=development --watch",
     "test": "tsc -p tsconfig.json --outDir .test-build --module commonjs && node test/adapters.test.js",
-    "test:bundle": "node test/bundle/run.js"
+    "test:bundle": "node test/bundle/run.js",
+    "test:worker": "npm --prefix worker test",
+    "typecheck:worker": "npm --prefix worker run typecheck",
+    "verify": "npm test && npm run test:worker && npm run typecheck:worker && npm run build && npm run test:bundle"
   },
   "devDependencies": {
     "@figma/plugin-typings": "^1.90.0",
