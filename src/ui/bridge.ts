@@ -15,8 +15,14 @@ export function post(msg: any) {
 
 // Asks code.ts for a fresh board snapshot and waits for it, so a contribution
 // never quotes a board that has moved on. Resolves anyway if the reply never lands.
+// A snapshot from the last few seconds is reused so a check-in does not walk
+// the FigJam page again for no reason.
+export const BOARD_FRESH_MS = 4_000;
 let boardWaiters: Array<() => void> = [];
 export function requestBoard(): Promise<void> {
+  if (state.boardReadAt > 0 && Date.now() - state.boardReadAt < BOARD_FRESH_MS) {
+    return Promise.resolve();
+  }
   post({ type: 'get-board' });
   return new Promise((resolve) => {
     const done = () => {

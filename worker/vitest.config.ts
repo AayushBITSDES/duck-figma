@@ -19,6 +19,17 @@ export default defineConfig({
               failOpenAiOnce = false;
               return Response.json({ error: { message: 'rate limited' } }, { status: 429 });
             }
+            if (body.includes('ECHO_ROUND')) {
+              return Response.json({
+                id: 'chatcmpl-echo',
+                choices: [
+                  {
+                    message: { role: 'assistant', content: body },
+                    finish_reason: 'stop',
+                  },
+                ],
+              });
+            }
             return Response.json({
               id: 'chatcmpl-test',
               choices: [

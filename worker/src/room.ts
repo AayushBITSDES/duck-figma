@@ -69,6 +69,7 @@ function emptyRecord(): RoomRecord {
 export class Room extends DurableObject<Env> {
   private record: RoomRecord;
   private facilitating = false;
+  private wipeGeneration = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -79,6 +80,8 @@ export class Room extends DurableObject<Env> {
       if (this.record.round.status === 'thinking') {
         this.record.round.status = 'failed';
         this.saveRecord();
+        this.broadcastError('facilitator_failed', 'The facilitator could not reply. Send retry to try again.');
+        this.broadcast({ type: 'round', round: this.record.round });
       }
     });
   }
@@ -163,7 +166,15 @@ export class Room extends DurableObject<Env> {
 
   async alarm(): Promise<void> {
     if (this.ctx.getWebSockets().length > 0) return;
+    const generation = this.wipeGeneration;
     await this.ctx.storage.deleteAll();
+    // deleteAll yields. A reconnect can land in that gap, write the room
+    // back, and then lose it if we keep wiping. Put the in-memory room
+    // back when anyone is here or a join bumped the generation.
+    if (this.ctx.getWebSockets().length > 0 || this.wipeGeneration !== generation) {
+      this.saveRecord();
+      return;
+    }
     this.record = emptyRecord();
   }
 
@@ -188,6 +199,7 @@ export class Room extends DurableObject<Env> {
       return;
     }
 
+    this.wipeGeneration += 1;
     await this.ctx.storage.deleteAlarm();
     const existing = this.record.participants[msg.clientId];
     this.record.participants[msg.clientId] = {
@@ -225,6 +237,7 @@ export class Room extends DurableObject<Env> {
       round: this.record.round,
     });
     this.broadcast({ type: 'presence', participants: this.connectedParticipants() });
+    await this.maybeFacilitate();
   }
 
   private async handleAct(
@@ -352,14 +365,11 @@ export class Room extends DurableObject<Env> {
 
       const roundLines = Object.entries(this.record.participants)
         .filter(([, p]) => p.status === 'contributed' || p.status === 'passed')
-        .map(([clientId, p]) => ({
+        .map(([, p]) => ({
           displayName: p.displayName,
           text: p.text ?? '',
           passed: p.status === 'passed',
-          clientId,
         }));
-      const connectedIds = new Set(this.connectedParticipants().map((p) => p.clientId));
-      const activeLines = roundLines.filter((line) => connectedIds.has(line.clientId));
       const priorFacilitator = this.record.messages
         .filter((m) => m.kind === 'facilitator')
         .map((m) => m.text);
@@ -368,7 +378,7 @@ export class Room extends DurableObject<Env> {
         apiKey: this.env.OPENAI_API_KEY,
         model: this.env.OPENAI_MODEL,
         board: this.record.board,
-        roundLines: activeLines.length ? activeLines : roundLines,
+        roundLines,
         priorFacilitator,
       });
 

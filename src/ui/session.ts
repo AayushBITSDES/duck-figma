@@ -202,11 +202,16 @@ function applyFrame(raw: unknown) {
     if (parsed.round.id !== state.round.id) state.actedRoundId = null;
     state.round = parsed.round;
     if (parsed.round.status === 'failed') {
-      state.banner = {
-        kind: 'error',
-        text: 'The duck could not reply. Retry this round.',
-        code: 'facilitator_failed',
-      };
+      const keepCap =
+        !!state.banner &&
+        (state.banner.code === 'session_cap' || state.banner.code === 'rate_limited');
+      if (!keepCap) {
+        state.banner = {
+          kind: 'error',
+          text: 'The duck could not reply. Retry this round.',
+          code: 'facilitator_failed',
+        };
+      }
     } else if (state.banner && state.banner.code === 'facilitator_failed') {
       state.banner = null;
     }

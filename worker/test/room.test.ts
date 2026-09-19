@@ -167,6 +167,26 @@ describe('rounds', () => {
     expect(duck.kind).toBe('facilitator');
   });
 
+  it('includes a departed actor in the facilitator brief', async () => {
+    const id = roomId('departed-voice');
+    const alex = await join(id, 'Alex', 'alex');
+    const sam = await join(id, 'Sam', 'sam');
+    await alex.until('presence');
+    alex.send({ type: 'contribute', roundId: 1, text: 'The nav is crowded.' });
+    await alex.until('message');
+    alex.ws.close(1000, 'leaving');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    sam.send({
+      type: 'contribute',
+      roundId: 1,
+      text: 'I agree.',
+      board: ['ECHO_ROUND'],
+    });
+    const duck = await sam.untilMessageKind('facilitator');
+    expect(duck.text).toContain('The nav is crowded.');
+    expect(duck.text).toContain('I agree.');
+  });
+
   it('unblocks when the last holdout disconnects and calls OpenAI once', async () => {
     const id = roomId('drop');
     const alex = await join(id, 'Alex', 'alex');
@@ -178,6 +198,26 @@ describe('rounds', () => {
     const duck = await alex.untilMessageKind('facilitator');
     expect(duck.kind).toBe('facilitator');
     expect(alex.log.filter((m) => m.type === 'message' && m.message.kind === 'facilitator')).toHaveLength(1);
+  });
+
+  it('facilitates when the actor reconnects after everyone disconnected', async () => {
+    const id = roomId('rejoin-ready');
+    const alexId = clientId('alex');
+    const alex = await joinClient(id, alexId, 'Alex');
+    openClients.push(alex);
+    const sam = await join(id, 'Sam', 'sam');
+    await alex.until('presence');
+    alex.send({ type: 'contribute', roundId: 1, text: 'The flow is unclear.' });
+    await alex.until('message');
+    alex.ws.close(1000, 'leaving');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    sam.ws.close(1000, 'leaving');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const again = await joinClient(id, alexId, 'Alex');
+    openClients.push(again);
+    const duck = await again.untilMessageKind('facilitator');
+    expect(duck.kind).toBe('facilitator');
+    expect(again.log.filter((m) => m.type === 'message' && m.message.kind === 'facilitator')).toHaveLength(1);
   });
 
   it('rejects a second action in the same round', async () => {
@@ -351,6 +391,31 @@ describe('expiry', () => {
     const snap = again.log.find((m) => m.type === 'snapshot');
     expect(snap && snap.type === 'snapshot' ? snap.messages : ['missing']).toEqual([]);
     expect(snap && snap.type === 'snapshot' ? snap.round : null).toEqual({ id: 1, status: 'collecting' });
+  });
+
+  it('does not wipe a reconnect that lands before cleanup', async () => {
+    const id = roomId('race');
+    const firstId = clientId('alex');
+    const first = await joinClient(id, firstId, 'Alex');
+    openClients.push(first);
+    first.send({ type: 'contribute', roundId: 1, text: 'Keep this across the expiry race.' });
+    await first.until('message');
+    first.ws.close(1000, 'leaving');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const second = await joinClient(id, firstId, 'Alex');
+    openClients.push(second);
+    const stub = env.ROOM.getByName(id);
+    await runDurableObjectAlarm(stub);
+    const snap = second.log.find((m) => m.type === 'snapshot');
+    expect(snap && snap.type === 'snapshot' ? snap.messages.map((m) => m.text) : []).toContain(
+      'Keep this across the expiry race.'
+    );
+    const third = await joinClient(id, firstId, 'Alex');
+    openClients.push(third);
+    const again = third.log.find((m) => m.type === 'snapshot');
+    expect(again && again.type === 'snapshot' ? again.messages.map((m) => m.text) : []).toContain(
+      'Keep this across the expiry race.'
+    );
   });
 
   it('restores messages if a client reconnects before the alarm', async () => {

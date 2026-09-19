@@ -120,6 +120,26 @@ module.exports = async function run() {
     [b.state.banner && b.state.banner.code, /could not reply/.test((b.state.banner && b.state.banner.text) || '')],
     ['facilitator_failed', true]);
 
+  ws.last().incoming({
+    type: 'error',
+    code: 'session_cap',
+    message: 'This session has reached its facilitator limit.',
+  });
+  ws.last().incoming({ type: 'round', round: { id: 1, status: 'failed' } });
+  check('a failed round after a cap keeps the cap banner',
+    [b.state.banner && b.state.banner.code, b.state.banner && b.state.banner.text],
+    ['session_cap', 'This session has reached its facilitator limit.']);
+
+  ws.last().incoming({
+    type: 'error',
+    code: 'rate_limited',
+    message: 'The facilitator is at its demo limit. Try again later.',
+  });
+  ws.last().incoming({ type: 'round', round: { id: 1, status: 'failed' } });
+  check('a failed round after a global cap keeps that banner',
+    [b.state.banner && b.state.banner.code, b.state.banner && b.state.banner.text],
+    ['rate_limited', 'The facilitator is at its demo limit. Try again later.']);
+
   ws.last().incoming({ type: 'pong' });
   check('pong is ignored', b.state.round.status, 'failed');
 
@@ -145,6 +165,19 @@ module.exports = async function run() {
       board: ['nav | search', 'onboarding copy'],
     });
   check('and counts as this client\'s action for the round', b.state.actedRoundId, 1);
+
+  b = boot();
+  deliver(identity());
+  ws.last().open();
+  ws.last().incoming(snapshot());
+  await flushBoard(['already here']);
+  const asked = dom.posted.filter((m) => m.type === 'get-board').length;
+  pending = b.session.actSetState('stuck');
+  await pending;
+  check('a recent board snapshot is reused on the next check-in',
+    dom.posted.filter((m) => m.type === 'get-board').length, asked);
+  check('and the action still carries that snapshot',
+    ws.last().sent.filter((m) => m.type === 'set-state').pop().board, ['already here']);
 
   pending = b.session.actContribute('a second thought');
   await flushBoard([]);

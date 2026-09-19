@@ -17,7 +17,7 @@ export function header(sub: string) {
   return (
     '<header class="hdr">' + duckSvg(20) +
     '<span class="hdr-title">Duck Check-In</span>' +
-    '<span class="hdr-sub">' + escapeHtml(sub) + '</span>' +
+    '<span id="hdr-sub" class="hdr-sub">' + escapeHtml(sub) + '</span>' +
     minimizeButton() +
     '</header>'
   );
@@ -136,10 +136,9 @@ function pendingOthers(): Participant[] {
   return out;
 }
 
-function presenceHtml(): string {
+function presenceInner(): string {
   if (!state.participants.length) {
-    return '<div id="presence" class="presence" role="list" aria-label="Connected">' +
-      '<span class="muted tiny">No one else is here yet.</span></div>';
+    return '<span class="muted tiny">No one else is here yet.</span>';
   }
   let chips = '';
   for (let i = 0; i < state.participants.length; i++) {
@@ -153,7 +152,12 @@ function presenceHtml(): string {
       '<span class="chip' + (mine ? ' you' : '') + (p.status !== 'pending' ? ' done' : '') +
       '" role="listitem">' + escapeHtml(label) + ', ' + status + '</span>';
   }
-  return '<div id="presence" class="presence" role="list" aria-label="Connected">' + chips + '</div>';
+  return chips;
+}
+
+function presenceHtml(): string {
+  return '<div id="presence" class="presence" role="list" aria-label="Connected">' +
+    presenceInner() + '</div>';
 }
 
 function roundLine(): string {
@@ -224,12 +228,22 @@ function threadHtml(): string {
     turns += turnHtml(state.messages[i]);
   }
   if (state.round.status === 'thinking') {
-    turns += '<div class="turn">' + duckSvg(16) + '<div class="bubble them muted">thinking...</div></div>';
+    turns += thinkingTurnHtml();
   }
   if (state.banner && state.banner.kind === 'error') {
-    turns += '<div class="turn"><div class="bubble err">' + escapeHtml(state.banner.text) + '</div></div>';
+    turns += bannerTurnHtml(state.banner.text);
   }
   return turns;
+}
+
+function thinkingTurnHtml(): string {
+  return '<section id="thinking-turn" class="turn">' + duckSvg(16) +
+    '<div class="bubble them muted">thinking...</div></section>';
+}
+
+function bannerTurnHtml(text: string): string {
+  return '<section id="banner-turn" class="turn"><div class="bubble err">' +
+    escapeHtml(text) + '</div></section>';
 }
 
 type Composer = 'moods' | 'contribute' | 'waiting' | 'thinking' | 'failed' | 'offline';
@@ -251,15 +265,21 @@ function moodButtons(): string {
   ).join('');
 }
 
-function footerHtml(kind: Composer): string {
+function capLocked(): boolean {
+  return !!(state.banner && (state.banner.code === 'session_cap' || state.banner.code === 'rate_limited'));
+}
+
+function footerInner(kind: Composer): string {
   const summaryText = lastFacilitatorText();
   const summaryDisabled = summaryText ? '' : ' disabled';
   const summary =
     '<button type="button" id="summary" class="ghost"' + summaryDisabled + '>Update summary</button>';
   const settings = '<button type="button" id="settings" class="ghost">Settings</button>';
   const locked = state.busy ? ' disabled' : '';
+  const info = state.banner && state.banner.kind === 'info' ? state.banner.text : '';
+  const infoHtml = info ? '<p class="muted tiny">' + escapeHtml(info) + '</p>' : '';
   if (kind === 'moods') {
-    return moodButtons() + summary + settings;
+    return moodButtons() + summary + settings + infoHtml;
   }
   if (kind === 'contribute') {
     return (
@@ -270,19 +290,21 @@ function footerHtml(kind: Composer): string {
       '<button type="button" id="send" class="primary"' + locked + '>Send</button>' +
       '<button type="button" id="pass" class="ghost"' + locked + '>Pass</button>' +
       '</div>' +
-      summary + settings
+      summary + settings + infoHtml
     );
   }
   if (kind === 'failed') {
-    return (
-      '<button type="button" id="retry" class="primary">Retry</button>' +
-      summary + settings
-    );
+    const retry = capLocked() ? '' : '<button type="button" id="retry" class="primary">Retry</button>';
+    return retry + summary + settings + infoHtml;
   }
   if (kind === 'waiting' || kind === 'thinking') {
-    return summary + settings;
+    return summary + settings + infoHtml;
   }
-  return '<p class="muted tiny">Reconnecting...</p>' + summary + settings;
+  return '<p class="muted tiny">Reconnecting...</p>' + summary + settings + infoHtml;
+}
+
+function footerHtml(kind: Composer): string {
+  return '<footer class="ftr" id="composer">' + footerInner(kind) + '</footer>';
 }
 
 // innerHTML rebuilds destroy the textarea; these remember caret/focus across
@@ -381,12 +403,127 @@ function wireFooter(kind: Composer, focus?: boolean) {
   }
 }
 
-export function showSession(opts?: { focus?: boolean }) {
-  captureComposer();
-  setMode('session');
-  const kind = composerKind();
+type FocusMemory = { id: string; start?: number; end?: number };
+
+let paintedMessageIds: string[] = [];
+let paintedComposer: Composer | null = null;
+let paintedInfo = '';
+let paintedThinking = false;
+let paintedBanner = '';
+
+function sessionDomReady(): boolean {
+  return !!(
+    document.getElementById('thread') &&
+    document.getElementById('presence') &&
+    document.getElementById('round') &&
+    document.getElementById('composer') &&
+    document.getElementById('hdr-sub')
+  );
+}
+
+function captureFocus(): FocusMemory | null {
+  const active = document.activeElement as HTMLElement | null;
+  if (!active || !active.id) return null;
+  const memory: FocusMemory = { id: active.id };
+  if (active.id === 'answer') {
+    const answer = active as HTMLTextAreaElement;
+    if (typeof answer.selectionStart === 'number') {
+      memory.start = answer.selectionStart;
+      memory.end = typeof answer.selectionEnd === 'number' ? answer.selectionEnd : answer.selectionStart;
+    }
+  }
+  return memory;
+}
+
+function restoreFocus(memory: FocusMemory | null) {
+  if (!memory) return;
+  const node = document.getElementById(memory.id) as HTMLTextAreaElement | null;
+  if (!node) return;
+  node.focus();
+  if (memory.id === 'answer' && typeof memory.start === 'number') {
+    composerCaret = memory.start;
+    composerCaretEnd = typeof memory.end === 'number' ? memory.end : memory.start;
+    restoreCaret(node);
+  }
+}
+
+function rememberPainted(kind: Composer) {
+  paintedMessageIds = state.messages.map((m) => m.id);
+  paintedComposer = kind;
+  paintedInfo = state.banner && state.banner.kind === 'info' ? state.banner.text : '';
+  paintedThinking = state.round.status === 'thinking';
+  paintedBanner = state.banner && state.banner.kind === 'error' ? state.banner.text : '';
+}
+
+function stripTagged(html: string, id: string): string {
+  const needle = 'id="' + id + '"';
+  const at = html.indexOf(needle);
+  if (at < 0) return html;
+  const open = html.lastIndexOf('<', at);
+  const tagMatch = /^<([a-zA-Z0-9]+)/.exec(html.slice(open));
+  if (!tagMatch || open < 0) return html;
+  const close = html.indexOf('</' + tagMatch[1] + '>', at);
+  if (close < 0) return html;
+  return html.slice(0, open) + html.slice(close + tagMatch[1].length + 3);
+}
+
+function syncThreadExtras(thread: HTMLElement) {
   const thinking = state.round.status === 'thinking';
+  const banner = state.banner && state.banner.kind === 'error' ? state.banner.text : '';
+  let html = thread.innerHTML;
+  if (thinking !== paintedThinking || banner !== paintedBanner) {
+    html = stripTagged(html, 'thinking-turn');
+    html = stripTagged(html, 'banner-turn');
+    if (thinking) html += thinkingTurnHtml();
+    if (banner) html += bannerTurnHtml(banner);
+    thread.innerHTML = html;
+  }
+  paintedThinking = thinking;
+  paintedBanner = banner;
+  thread.setAttribute('aria-busy', thinking ? 'true' : 'false');
+}
+
+function appendNewTurns(thread: HTMLElement) {
+  let added = '';
+  for (let i = 0; i < state.messages.length; i++) {
+    const message = state.messages[i];
+    if (paintedMessageIds.indexOf(message.id) !== -1) continue;
+    added += turnHtml(message);
+    paintedMessageIds.push(message.id);
+  }
+  if (added) thread.innerHTML += added;
+}
+
+function patchSession(kind: Composer, focus?: boolean): boolean {
+  const presence = document.getElementById('presence');
+  const sub = document.getElementById('hdr-sub');
+  const round = document.getElementById('round');
+  const thread = document.getElementById('thread');
+  const composer = document.getElementById('composer');
+  if (!presence || !sub || !round || !thread || !composer) return false;
+
+  presence.innerHTML = presenceInner();
+  sub.innerHTML = escapeHtml(subtitle());
+  round.innerHTML = escapeHtml(roundLine());
+  appendNewTurns(thread);
+  syncThreadExtras(thread);
+
   const info = state.banner && state.banner.kind === 'info' ? state.banner.text : '';
+  if (kind !== paintedComposer || info !== paintedInfo) {
+    composer.innerHTML = footerInner(kind);
+    paintedComposer = kind;
+    paintedInfo = info;
+    wireFooter(kind, !!focus);
+  } else if (focus) {
+    wireFooter(kind, true);
+  }
+
+  thread.scrollTop = thread.scrollHeight;
+  return true;
+}
+
+function paintSessionScreen(kind: Composer, focus?: boolean) {
+  const thinking = state.round.status === 'thinking';
   render(
     '<div class="screen">' +
     header(subtitle()) +
@@ -396,23 +533,34 @@ export function showSession(opts?: { focus?: boolean }) {
     (thinking ? ' aria-busy="true"' : '') + '>' +
     threadHtml() +
     '</main>' +
-    '<footer class="ftr">' +
     footerHtml(kind) +
-    (info ? '<p class="muted tiny">' + escapeHtml(info) + '</p>' : '') +
-    '</footer></div>'
+    '</div>'
   );
+  rememberPainted(kind);
   if (state.minimized) return;
   const thread = document.getElementById('thread');
   if (thread) thread.scrollTop = thread.scrollHeight;
-  wireFooter(kind, !!(opts && opts.focus));
+  wireFooter(kind, !!focus);
 }
 
-export function showCheckIn() {
-  // Kept as a no-op name so older call sites cannot crash mid-merge; the
-  // group session has no idle check-in.
-  showConnecting();
-}
+export function showSession(opts?: { focus?: boolean }) {
+  captureComposer();
+  const prevFocus = captureFocus();
+  const kind = composerKind();
+  const focus = !!(opts && opts.focus);
+  const canPatch = state.mode === 'session' && !state.minimized && sessionDomReady();
 
-export function idleDuck() {
-  showConnecting();
+  setMode('session');
+  if (canPatch && patchSession(kind, focus)) {
+    if (!focus) restoreFocus(prevFocus);
+    return;
+  }
+
+  paintedMessageIds = [];
+  paintedComposer = null;
+  paintedInfo = '';
+  paintedThinking = false;
+  paintedBanner = '';
+  paintSessionScreen(kind, focus);
+  if (!focus) restoreFocus(prevFocus);
 }

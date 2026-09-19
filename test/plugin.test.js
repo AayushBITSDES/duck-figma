@@ -44,13 +44,21 @@ function makeFigma(opts) {
   const resizes = [];
   const notifies = [];
   const stickies = [];
-  const accessed = { activeUsers: false };
+  const accessed = { activeUsers: false, findAll: 0, findAllWithCriteria: 0 };
   let docChange = null;
   let nextStickyId = 1;
 
   const page = {
     type: 'PAGE',
-    findAll: (pred) => (typeof pred === 'function' ? nodes.filter(pred) : nodes.slice()),
+    findAll: (pred) => {
+      accessed.findAll += 1;
+      return typeof pred === 'function' ? nodes.filter(pred) : nodes.slice();
+    },
+    findAllWithCriteria: (query) => {
+      accessed.findAllWithCriteria += 1;
+      const types = (query && query.types) || [];
+      return nodes.filter((n) => types.indexOf(n.type) !== -1);
+    },
     selection: [],
     getPluginData: (k) => pageData[k] || '',
     setPluginData: (k, v) => { pageData[k] = String(v); },
@@ -277,6 +285,12 @@ module.exports = async function run() {
   check('blank text is skipped', items.indexOf('') > -1, false);
   check('each item is clipped to 200 characters', items[5], 'x'.repeat(200));
   check('and the list stops at 40', items.length, 40);
+  check('board reads typed nodes instead of walking every child',
+    [boardEnv.accessed.findAllWithCriteria > 0, boardEnv.accessed.findAll], [true, 0]);
+  const walks = boardEnv.accessed.findAllWithCriteria;
+  const again = board.getBoardItems();
+  check('a second read reuses the recent snapshot', again, items);
+  check('and does not walk the page again', boardEnv.accessed.findAllWithCriteria, walks);
   board.sendBoard();
   check('sendBoard posts the snapshot the UI asked for',
     boardEnv.sent.filter((m) => m.type === 'board-context').pop(), { type: 'board-context', board: items });

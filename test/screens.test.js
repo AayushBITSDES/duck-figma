@@ -125,6 +125,8 @@ module.exports = async function run() {
   check('and the composer still shows it', el('answer').value, 'half a thought');
   check('and restores the caret', [el('answer').selectionStart, el('answer').selectionEnd], [4, 7]);
   check('and still names the new arrival', html().indexOf('Grace') > -1, true);
+  const thread = el('thread');
+  check('presence does not rebuild the chat log node', el('thread') === thread, true);
 
   ws.last().incoming({
     type: 'message',
@@ -230,6 +232,24 @@ module.exports = async function run() {
   el('summary').onclick();
   check('and clicking it posts nothing',
     dom.posted.filter((m) => m.type === 'update-summary').length, 0);
+
+  // --- Cap failures keep the limit copy and hide Retry ---------------------
+  const cap = boot();
+  live(cap);
+  ws.last().incoming({
+    type: 'error',
+    code: 'session_cap',
+    message: 'This session has reached its facilitator limit.',
+  });
+  ws.last().incoming({ type: 'round', round: { id: 1, status: 'failed' } });
+  check('a cap failure keeps the real limit message',
+    html().indexOf('This session has reached its facilitator limit.') > -1, true);
+  check('and does not offer Retry', html().indexOf('id="retry"') > -1, false);
+
+  const failed = boot();
+  live(failed);
+  ws.last().incoming({ type: 'round', round: { id: 1, status: 'failed' } });
+  check('a facilitator failure still offers Retry', html().indexOf('id="retry"') > -1, true);
 
   // --- Settings from the session returns to the session ---------------------
   const roundTrip = boot();

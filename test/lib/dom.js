@@ -23,16 +23,58 @@ const els = {};
 // startup, so only 'root' itself (never part of its own content) resolves.
 let currentHtml = '';
 
+function collectIds(html) {
+  const out = new Set();
+  const re = /id="([^"]+)"/g;
+  let m;
+  while ((m = re.exec(html || ''))) out.add(m[1]);
+  return out;
+}
+
+function replaceIdInner(html, id, inner) {
+  const needle = 'id="' + id + '"';
+  const at = html.indexOf(needle);
+  if (at < 0) return html;
+  const open = html.lastIndexOf('<', at);
+  const tagMatch = /^<([a-zA-Z0-9]+)/.exec(html.slice(open));
+  if (!tagMatch || open < 0) return html;
+  const close = html.indexOf('</' + tagMatch[1] + '>', at);
+  if (close < 0) return html;
+  const gt = html.indexOf('>', at);
+  if (gt < 0 || gt > close) return html;
+  return html.slice(0, gt + 1) + inner + html.slice(close);
+}
+
+function syncChild(id, nextInner) {
+  const prevInner = els[id] ? els[id]._html : '';
+  const gone = collectIds(prevInner);
+  const keep = collectIds(nextInner);
+  gone.forEach((childId) => {
+    if (!keep.has(childId) && childId !== id) delete els[childId];
+  });
+  currentHtml = replaceIdInner(currentHtml, id, nextInner);
+  if (els.root) els.root._html = currentHtml;
+}
+
 function el(id) {
   if (!els[id]) {
     els[id] = {
       id: id, value: '', dataset: {}, scrollTop: 0, scrollHeight: 0,
       onclick: null, onchange: null, oninput: null, focus: () => {}, _html: '',
-      set innerHTML(v) { this._html = v; if (id === 'root') rerender(v); },
+      attrs: {},
+      set innerHTML(v) {
+        if (id !== 'root') syncChild(id, v);
+        this._html = v;
+        if (id === 'root') rerender(v);
+      },
       get innerHTML() { return this._html; },
       set textContent(v) {
-        this._html = String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const html = String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        if (id !== 'root') syncChild(id, html);
+        this._html = html;
       },
+      setAttribute(name, value) { this.attrs[name] = String(value); },
+      getAttribute(name) { return this.attrs[name]; },
     };
   }
   return els[id];
