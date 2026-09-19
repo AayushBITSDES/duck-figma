@@ -281,6 +281,8 @@ module.exports = async function run() {
   collapsed.deliver({ type: 'window', minimized: false });
   check('expanding repaints the session rather than the connecting screen',
     collapsed.state.mode, 'session');
+  check('and shows messages that arrived while collapsed',
+    html().indexOf('Grace joined') > -1, true);
 
   // --- The resize grip must not stay live behind the collapsed duck --------
   // ui.html hides #grip with `body.min #grip`, since #grip lives outside

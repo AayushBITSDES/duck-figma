@@ -4,8 +4,24 @@ export const BOARD_CACHE_MS = 4_000;
 
 const TEXT_TYPES = ['STICKY', 'TEXT', 'SHAPE_WITH_TEXT', 'CODE_BLOCK', 'SECTION'] as const;
 
-type CachedBoard = { at: number; items: string[] };
+type CachedBoard = { at: number; pageId: string; items: string[] };
 let cached: CachedBoard | null = null;
+let watching = false;
+
+function pageId(): string {
+  return figma.currentPage && figma.currentPage.id ? figma.currentPage.id : '';
+}
+
+function invalidateBoard() {
+  cached = null;
+}
+
+function watchBoard() {
+  if (watching) return;
+  watching = true;
+  figma.on('documentchange', invalidateBoard);
+  figma.on('currentpagechange', invalidateBoard);
+}
 
 function nodeText(n: SceneNode): string {
   if (n.type === 'STICKY') return (n as StickyNode).text.characters;
@@ -35,10 +51,14 @@ function readPage(): string[] {
 }
 
 export function getBoardItems(): string[] {
+  watchBoard();
   const now = Date.now();
-  if (cached && now - cached.at < BOARD_CACHE_MS) return cached.items.slice();
+  const id = pageId();
+  if (cached && cached.pageId === id && now - cached.at < BOARD_CACHE_MS) {
+    return cached.items.slice();
+  }
   const items = readPage();
-  cached = { at: now, items };
+  cached = { at: now, pageId: id, items };
   return items.slice();
 }
 

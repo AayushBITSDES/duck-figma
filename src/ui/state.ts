@@ -35,7 +35,6 @@ export const state = {
   banner: null as Banner | null,
 
   boardItems: [] as string[],
-  boardReadAt: 0,
 
   // Survives innerHTML repaints from presence/message/round/reconnect.
   // Cleared only after a contribution is successfully delivered.

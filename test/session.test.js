@@ -173,11 +173,12 @@ module.exports = async function run() {
   await flushBoard(['already here']);
   const asked = dom.posted.filter((m) => m.type === 'get-board').length;
   pending = b.session.actSetState('stuck');
+  check('a later check-in asks for the board again',
+    dom.posted.filter((m) => m.type === 'get-board').length, asked + 1);
+  await flushBoard(['changed on the page']);
   await pending;
-  check('a recent board snapshot is reused on the next check-in',
-    dom.posted.filter((m) => m.type === 'get-board').length, asked);
-  check('and the action still carries that snapshot',
-    ws.last().sent.filter((m) => m.type === 'set-state').pop().board, ['already here']);
+  check('and the action carries the latest snapshot',
+    ws.last().sent.filter((m) => m.type === 'set-state').pop().board, ['changed on the page']);
 
   pending = b.session.actContribute('a second thought');
   await flushBoard([]);

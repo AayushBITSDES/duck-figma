@@ -13,16 +13,12 @@ export function post(msg: any) {
   parent.postMessage({ pluginMessage: msg }, '*');
 }
 
-// Asks code.ts for a fresh board snapshot and waits for it, so a contribution
-// never quotes a board that has moved on. Resolves anyway if the reply never lands.
-// A snapshot from the last few seconds is reused so a check-in does not walk
-// the FigJam page again for no reason.
-export const BOARD_FRESH_MS = 4_000;
+// Asks code.ts for a board snapshot and waits for it, so a contribution
+// never quotes a board that has moved on. Resolves anyway if the reply never
+// lands. The plugin reuses a recent same-page snapshot; this side always
+// asks, so a page switch or edit cannot send stale text.
 let boardWaiters: Array<() => void> = [];
 export function requestBoard(): Promise<void> {
-  if (state.boardReadAt > 0 && Date.now() - state.boardReadAt < BOARD_FRESH_MS) {
-    return Promise.resolve();
-  }
   post({ type: 'get-board' });
   return new Promise((resolve) => {
     const done = () => {
@@ -46,7 +42,6 @@ window.onmessage = (event) => {
   }
   if (msg.type === 'board-context') {
     state.boardItems = Array.isArray(msg.board) ? msg.board : [];
-    state.boardReadAt = Date.now();
     const waiters = boardWaiters;
     boardWaiters = [];
     waiters.forEach((w) => w());

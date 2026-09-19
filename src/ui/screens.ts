@@ -551,6 +551,10 @@ export function showSession(opts?: { focus?: boolean }) {
   const canPatch = state.mode === 'session' && !state.minimized && sessionDomReady();
 
   setMode('session');
+  // render() swallows paints while collapsed. Do not bookkeep that as a
+  // finished paint: the incremental path would then skip messages that
+  // arrived while the duck was the only thing on screen.
+  if (state.minimized) return;
   if (canPatch && patchSession(kind, focus)) {
     if (!focus) restoreFocus(prevFocus);
     return;

@@ -45,10 +45,11 @@ function makeFigma(opts) {
   const notifies = [];
   const stickies = [];
   const accessed = { activeUsers: false, findAll: 0, findAllWithCriteria: 0 };
-  let docChange = null;
+  const listeners = { documentchange: [], currentpagechange: [] };
   let nextStickyId = 1;
 
   const page = {
+    id: opts.pageId || 'page-1',
     type: 'PAGE',
     findAll: (pred) => {
       accessed.findAll += 1;
@@ -66,7 +67,10 @@ function makeFigma(opts) {
 
   const figma = {
     showUI: () => {},
-    on: (type, fn) => { if (type === 'documentchange') docChange = fn; },
+    on: (type, fn) => {
+      if (!listeners[type]) listeners[type] = [];
+      listeners[type].push(fn);
+    },
     notify: (m) => notifies.push(m),
     fileKey: opts.fileKey,
     currentUser: opts.currentUser,
@@ -105,7 +109,13 @@ function makeFigma(opts) {
   return {
     figma, store, rootData, pageData, nodes, nodeById, sent, resizes, notifies,
     stickies, accessed,
-    edit: (origin) => docChange && docChange({ documentChanges: [{ origin: origin }] }),
+    edit: (origin) => {
+      (listeners.documentchange || []).forEach((fn) => fn({ documentChanges: [{ origin: origin }] }));
+    },
+    changePage: (id) => {
+      page.id = id;
+      (listeners.currentpagechange || []).forEach((fn) => fn());
+    },
   };
 }
 
@@ -294,6 +304,17 @@ module.exports = async function run() {
   board.sendBoard();
   check('sendBoard posts the snapshot the UI asked for',
     boardEnv.sent.filter((m) => m.type === 'board-context').pop(), { type: 'board-context', board: items });
+  boardEnv.changePage('page-2');
+  board.getBoardItems();
+  check('switching pages walks again', boardEnv.accessed.findAllWithCriteria, walks + 1);
+  const afterPage = boardEnv.accessed.findAllWithCriteria;
+  board.getBoardItems();
+  check('the new page snapshot is reused', boardEnv.accessed.findAllWithCriteria, afterPage);
+  boardEnv.nodes.unshift({ type: 'TEXT', characters: 'just added' });
+  boardEnv.edit('LOCAL');
+  const afterEdit = board.getBoardItems();
+  check('a document change walks again', boardEnv.accessed.findAllWithCriteria > afterPage, true);
+  check('and includes the new text', afterEdit[0], 'just added');
 
   const viaCode = bootPlugin({ duckClientId: 'client-01' }, { fileKey: 'F' });
   await settled();
