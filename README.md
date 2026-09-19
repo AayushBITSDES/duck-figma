@@ -67,9 +67,10 @@ npx wrangler secret put OPENAI_API_KEY
 npm run deploy
 ```
 
-Replace `duck-facilitator.example.workers.dev` in both `manifest.json` and
-`src/ui/session.ts` with the deployed hostname, then run `npm run verify`.
-The hostname must match in both places or Figma will block the WebSocket.
+The hosted Worker is `duck-facilitator.aayushkggn.workers.dev`. That hostname
+is already in `manifest.json` and `src/ui/session.ts`. If it changes, update
+both places and run `npm run verify`. They must match or Figma will block
+the WebSocket.
 
 The plugin never receives the OpenAI key. The Worker selects the model through
 its non-secret `OPENAI_MODEL` setting.

@@ -13,7 +13,7 @@ import { iHaveActed, state } from './state';
 // Hosted Worker. Must match manifest.json networkAccess.allowedDomains
 // (both wss:// and https://). Figma CSPs any other host before the upgrade.
 // The iframe never talks to a model host; it only opens this session socket.
-export const PRODUCTION_WS_ORIGIN = 'wss://duck-facilitator.example.workers.dev';
+export const PRODUCTION_WS_ORIGIN = 'wss://duck-facilitator.aayushkggn.workers.dev';
 
 // `npx wrangler dev` on the default port. Flip this flag to talk to it —
 // the plugin iframe origin is null, so hostname sniffing cannot choose

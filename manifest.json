@@ -8,8 +8,8 @@
   "permissions": ["currentuser"],
   "networkAccess": {
     "allowedDomains": [
-      "https://duck-facilitator.example.workers.dev",
-      "wss://duck-facilitator.example.workers.dev"
+      "https://duck-facilitator.aayushkggn.workers.dev",
+      "wss://duck-facilitator.aayushkggn.workers.dev"
     ],
     "devAllowedDomains": [
       "http://localhost:8787",

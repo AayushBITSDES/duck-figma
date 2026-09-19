@@ -313,11 +313,11 @@ module.exports = async function run() {
   check('pagehide disconnects the socket', b.state.ws, 'off');
 
   check('the hosted origin is the one the manifest allows',
-    b.session.PRODUCTION_WS_ORIGIN, 'wss://duck-facilitator.example.workers.dev');
+    b.session.PRODUCTION_WS_ORIGIN, 'wss://duck-facilitator.aayushkggn.workers.dev');
   check('local worker is an explicit flag, off by default', b.session.USE_LOCAL_WORKER, false);
   check('roomSocketUrl encodes the room id',
     b.session.roomSocketUrl('file:a/b'),
     b.session.PRODUCTION_WS_ORIGIN + '/room?roomId=' + encodeURIComponent('file:a/b'));
   check('and that encoded url uses the production origin',
-    b.session.roomSocketUrl('file:a/b').indexOf('wss://duck-facilitator.example.workers.dev/') === 0, true);
+    b.session.roomSocketUrl('file:a/b').indexOf('wss://duck-facilitator.aayushkggn.workers.dev/') === 0, true);
 };
