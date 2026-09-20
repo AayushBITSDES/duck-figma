@@ -412,6 +412,31 @@ module.exports = async function run() {
       message: "Couldn't write that sticky: the font wouldn't load.",
     });
 
+  // Two clicks on Update summary before the first finishes. Both used to
+  // look for a sticky, both used to miss, and both used to create one.
+  ({ env: sumEnv, mod: summary } = loadPlugin('summary', { cx: 0, cy: 0 }));
+  await Promise.all([summary.updateSummary('First click'), summary.updateSummary('Second click')]);
+  check('a double click writes one sticky, not two', sumEnv.stickies.length, 1);
+  check('and the later click is what survives', sumEnv.stickies[0].text.characters, 'Second click');
+
+  // Same race across the network: a collaborator's summary syncs in while
+  // our own font load is still pending.
+  ({ env: sumEnv, mod: summary } = loadPlugin('summary'));
+  const theirs = makeSticky('theirs', { parent: sumEnv.figma.currentPage });
+  theirs.setPluginData('duckRole', 'session-summary');
+  theirs.name = 'Session Summary';
+  let injected = false;
+  sumEnv.figma.loadFontAsync = async () => {
+    if (injected) return;
+    injected = true;
+    sumEnv.nodes.push(theirs);
+    sumEnv.nodeById[theirs.id] = theirs;
+  };
+  await summary.updateSummary('Ours');
+  check("a collaborator's sticky arriving mid-write is adopted", theirs.text.characters, 'Ours');
+  check('and the duplicate we made is removed', sumEnv.stickies[0].removed, true);
+  check('leaving the page pointed at the surviving sticky', sumEnv.pageData.duckSummaryNodeId, theirs.id);
+
   const throughCode = bootPlugin({ duckClientId: 'client-01' }, { fileKey: 'F', cx: 0, cy: 0 });
   await settled();
   throughCode.send({ type: 'update-summary', text: 'From the UI' });
