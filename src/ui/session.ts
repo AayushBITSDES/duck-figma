@@ -2,6 +2,7 @@ import {
   ChatMessage,
   ClientMessage,
   Mood,
+  REPLACED_CLOSE_REASON,
   SESSION_LIMITS,
   ServerErrorCode,
   ServerMessage,
@@ -23,6 +24,7 @@ export const USE_LOCAL_WORKER = false;
 
 const PING_MS = 20_000;
 const RECONNECT_MS = [500, 1000, 2000, 4000];
+
 
 type PaintFn = () => void;
 let paint: PaintFn = () => {};
@@ -120,7 +122,10 @@ function openSocket(myGen: number) {
   socket = next;
   next.onopen = () => {
     if (myGen !== gen || socket !== next) return;
-    attempt = 0;
+    // The backoff is reset when a snapshot lands (applyFrame), not here. A
+    // socket that opens and then dies without one is a failure however
+    // healthy the handshake looked, and resetting on open lets that loop run
+    // at full speed forever.
     state.ws = 'live';
     send({
       type: 'join',
@@ -139,11 +144,28 @@ function openSocket(myGen: number) {
   next.onerror = () => {
     // onclose follows; reconnect is scheduled there.
   };
-  next.onclose = () => {
+  next.onclose = (event?: { code?: number; reason?: string }) => {
     if (myGen !== gen || socket !== next) return;
     socket = null;
     clearTimers();
     if (halt || tearingDown) return;
+    // The room keeps one socket per clientId and hangs up on the older one
+    // when the same person joins again (worker/src/room.ts, handleJoin).
+    // clientStorage is per device, so the same file open in two windows
+    // gives both the same clientId: reconnecting here would kick the other
+    // window, which would kick this one back, forever. Stop and let the user
+    // pick which window wins.
+    if (event && event.reason === REPLACED_CLOSE_REASON) {
+      halt = true;
+      state.ws = 'off';
+      state.banner = {
+        kind: 'error',
+        text: 'Duck is open in another window. Only one can be connected.',
+        action: 'reconnect',
+      };
+      paint();
+      return;
+    }
     scheduleReconnect(myGen);
   };
 }
@@ -223,7 +245,9 @@ function applyFrame(raw: unknown) {
       clearTimers();
       closeSocket();
       state.ws = 'off';
-      state.banner = { kind: 'error', text: parsed.message, code: parsed.code };
+      // Someone may leave; offer the retry rather than making the user
+      // reopen the whole plugin to get another attempt.
+      state.banner = { kind: 'error', text: parsed.message, code: parsed.code, action: 'reconnect' };
     } else {
       if (
         parsed.code === 'stale_round' ||
@@ -278,6 +302,17 @@ export function connectSession(roomId: string, clientId: string, displayName: st
   tearingDown = false;
   const myGen = ++gen;
   openSocket(myGen);
+}
+
+// Deliberate, user-driven retry after a halt (a replaced socket, a full
+// room). Everything else reconnects on its own, so nothing else calls this.
+export function reconnectSession() {
+  if (!state.roomId || !state.clientId) return;
+  halt = false;
+  tearingDown = false;
+  attempt = 0;
+  state.banner = null;
+  openSocket(++gen);
 }
 
 export function disconnectSession() {

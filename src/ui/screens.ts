@@ -2,7 +2,7 @@ import { ChatMessage, Participant, SESSION_LIMITS } from '../shared/protocol';
 import { post, applyTextSize } from './bridge';
 import { duckSvg } from './duck';
 import { escapeHtml, render, renderCollapsed, renderMarkdown } from './render';
-import { actContribute, actPass, actRetry, actSetState, onPaint } from './session';
+import { actContribute, actPass, actRetry, actSetState, onPaint, reconnectSession } from './session';
 import { iHaveActed, lastFacilitatorText, moodLabel, MOODS, Mode, state } from './state';
 
 // The plugin has no window into which screen is up. Every screen goes through
@@ -304,6 +304,12 @@ function footerInner(kind: Composer): string {
   if (kind === 'waiting' || kind === 'thinking') {
     return summary + settings + infoHtml;
   }
+  // 'offline' covers both "the socket dropped and we are on it" and "we have
+  // stopped trying and only the user can decide what happens next".
+  if (state.banner && state.banner.action === 'reconnect') {
+    return '<button type="button" id="reconnect" class="primary">Reconnect</button>' +
+      summary + settings + infoHtml;
+  }
   return '<p class="muted tiny">Reconnecting...</p>' + summary + settings + infoHtml;
 }
 
@@ -374,6 +380,8 @@ function wireFooter(kind: Composer, focus?: boolean) {
   if (pass) pass.onclick = () => actPass();
   const retry = document.getElementById('retry');
   if (retry) retry.onclick = () => actRetry();
+  const reconnect = document.getElementById('reconnect');
+  if (reconnect) reconnect.onclick = () => reconnectSession();
   const summary = document.getElementById('summary');
   if (summary) {
     summary.onclick = () => {

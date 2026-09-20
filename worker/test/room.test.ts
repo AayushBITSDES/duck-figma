@@ -1,8 +1,8 @@
 import { env, exports } from 'cloudflare:workers';
 import { runDurableObjectAlarm } from 'cloudflare:test';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ChatMessage, ServerMessage } from '../../src/shared/protocol';
-import { SESSION_LIMITS } from '../../src/shared/protocol';
+import { REPLACED_CLOSE_REASON, SESSION_LIMITS } from '../../src/shared/protocol';
 import { GLOBAL_LIMITER_INSTANCE } from '../src/limiter';
 import { BOARD_SNAPSHOT_END, BOARD_SNAPSHOT_START, buildFacilitatorMessages } from '../src/openai';
 import { clientId, joinClient, openSocket, roomId, TestClient } from './helpers';
@@ -350,6 +350,29 @@ describe('limits', () => {
     expect(again && again.type === 'snapshot' ? again.participants : []).toHaveLength(
       SESSION_LIMITS.maxParticipants
     );
+  });
+
+  // The same person with the file open in two windows shares one clientId,
+  // because it lives in per-device clientStorage. The loser has to be able
+  // to tell this apart from a dropped connection: if it just reconnects it
+  // kicks the other window, which kicks it back, at the first backoff step,
+  // forever. src/ui/session.ts keys that off this exact close reason.
+  it('closes a superseded socket with the reason the client watches for', async () => {
+    const id = roomId('takeover');
+    const cid = clientId('twowindows');
+    const first = await joinClient(id, cid, 'Ada');
+    openClients.push(first);
+
+    const closes: Array<{ code: number; reason: string }> = [];
+    first.ws.addEventListener('close', (event) => {
+      closes.push({ code: event.code, reason: event.reason });
+    });
+
+    const second = await joinClient(id, cid, 'Ada');
+    openClients.push(second);
+    await vi.waitFor(() => expect(closes).toHaveLength(1));
+
+    expect(closes[0]).toEqual({ code: 1000, reason: REPLACED_CLOSE_REASON });
   });
 });
 
