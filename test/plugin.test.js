@@ -437,6 +437,39 @@ module.exports = async function run() {
   check('and the duplicate we made is removed', sumEnv.stickies[0].removed, true);
   check('leaving the page pointed at the surviving sticky', sumEnv.pageData.duckSummaryNodeId, theirs.id);
 
+  // Switching pages while the font load is pending must not let the write
+  // wander: the adoption lookup reads figma.currentPage, so unpinned it
+  // could delete the sticky just made here and overwrite the other page's.
+  ({ env: sumEnv, mod: summary } = loadPlugin('summary'));
+  const pageTwoData = {};
+  const pageTwo = {
+    id: 'page-2',
+    type: 'PAGE',
+    selection: [],
+    getPluginData: (k) => pageTwoData[k] || '',
+    setPluginData: (k, v) => { pageTwoData[k] = String(v); },
+    findAll: (pred) => (typeof pred === 'function' ? [elsewhere].filter(pred) : [elsewhere]),
+  };
+  const elsewhere = makeSticky('page-two-summary', { parent: pageTwo });
+  elsewhere.setPluginData('duckRole', 'session-summary');
+  elsewhere.name = 'Session Summary';
+  elsewhere.text.characters = 'Page two summary';
+  sumEnv.nodeById[elsewhere.id] = elsewhere;
+  let switched = false;
+  sumEnv.figma.loadFontAsync = async () => {
+    if (switched) return;
+    switched = true;
+    sumEnv.figma.currentPage = pageTwo;
+  };
+  await summary.updateSummary('Started on page one');
+  check('a page switch mid-write leaves the other page alone',
+    elsewhere.text.characters, 'Page two summary');
+  check('and still writes the sticky it created', sumEnv.stickies[0].text.characters, 'Started on page one');
+  check('and does not delete it', sumEnv.stickies[0].removed, false);
+  check('and remembers it on the page it started from, not the one in view',
+    [sumEnv.pageData.duckSummaryNodeId, pageTwoData.duckSummaryNodeId],
+    [sumEnv.stickies[0].id, undefined]);
+
   const throughCode = bootPlugin({ duckClientId: 'client-01' }, { fileKey: 'F', cx: 0, cy: 0 });
   await settled();
   throughCode.send({ type: 'update-summary', text: 'From the UI' });
@@ -470,7 +503,7 @@ module.exports = async function run() {
   // button is what rescues a panel bigger than the Figma window.
   boot = bootPlugin({ duckWindow: { width: 999999, height: 999999, minimized: false } });
   await settled();
-  check('an oversized stored value is clamped down on restore', boot.lastResize(), [1400, 1000]);
+  check('an oversized stored value is clamped down on restore', boot.lastResize(), [800, 720]);
 
   boot = bootPlugin({ duckWindow: { width: 300, height: 400, minimized: true } });
   await settled();
@@ -532,7 +565,7 @@ module.exports = async function run() {
   boot = bootPlugin({});
   await settled();
   boot.send({ type: 'resize', width: 999999, height: 999999 });
-  check('a resize above the maximum is clamped', boot.lastResize(), [1400, 1000]);
+  check('a resize above the maximum is clamped', boot.lastResize(), [800, 720]);
 
   // Width and height move independently, so an edge grip can widen the panel
   // without dragging its height along.
@@ -545,7 +578,7 @@ module.exports = async function run() {
 
   // The escape hatch for a panel dragged bigger than the Figma window, where
   // every right-anchored control is off screen.
-  boot = bootPlugin({ duckWindow: { width: 1200, height: 900, minimized: false } });
+  boot = bootPlugin({ duckWindow: { width: 760, height: 700, minimized: false } });
   await settled();
   boot.send({ type: 'reset-size' });
   await settled();
@@ -553,7 +586,7 @@ module.exports = async function run() {
   check('and writes it through immediately', boot.state.duckWindow.width, 280);
 
   // A panel minimized and then reset must come back open, not stay a duck.
-  boot = bootPlugin({ duckWindow: { width: 1200, height: 900, minimized: true } });
+  boot = bootPlugin({ duckWindow: { width: 760, height: 700, minimized: true } });
   await settled();
   boot.send({ type: 'reset-size' });
   await settled();

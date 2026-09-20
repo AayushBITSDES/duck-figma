@@ -280,6 +280,11 @@ module.exports = async function run() {
   ws.last().incoming({ type: 'error', code: 'room_full', message: 'This room is full.' });
   check('room_full hangs up', b.state.ws, 'off');
   check('and shows the server\'s message', b.state.banner && b.state.banner.code, 'room_full');
+  // room_full answers the very first join, so this halt always lands before
+  // a snapshot, on the connecting screen, which has no footer to put the
+  // control in. It has to carry its own copy or the user is simply stuck.
+  check('and offers Reconnect on the pre-snapshot screen',
+    dom.el('root').innerHTML.indexOf('id="reconnect"') > -1, true);
   const hung = ws.instances().length;
   await new Promise((r) => setTimeout(r, 550));
   check('and does not reconnect', ws.instances().length, hung);

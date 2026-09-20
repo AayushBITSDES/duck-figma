@@ -38,15 +38,17 @@
 const MINIMIZED_SIZE = 70; // figma.showUI's own hard floor for width; reused as the collapsed duck's fixed size.
 const MIN_OPEN_WIDTH = 200;
 const MIN_OPEN_HEIGHT = 260;
-// Both the resize grips (right/bottom edges) and the minimize button (top:6;
-// right:6) are anchored to the iframe's own right edge, so a panel bigger
-// than the Figma window pushes them out of reach. The panel's top-left
-// corner never moves, though, so Settings stays clickable at any size, and
-// its "Reset panel size" button (handleResetSize below) is the way back.
-// With that escape hatch in place these caps only have to stop absurd
-// values, not guarantee the controls stay on screen.
-const MAX_OPEN_WIDTH = 1400;
-const MAX_OPEN_HEIGHT = 1000;
+// Every control that could undo an oversized panel sits on an edge that the
+// panel itself can push off screen: the grips at right and bottom, minimize
+// at top right, and Settings (which holds "Reset panel size") in the footer
+// at the bottom. A panel bigger than the Figma window clips all of them, and
+// the size is persisted, so reopening brings the same trap back. The cap has
+// to keep the panel inside the smallest host window anyone plausibly has.
+// 1280x800 is about as small as a laptop display gets; this stays well under
+// it with room for Figma's own chrome. handleResetSize below is the belt to
+// this pair of braces, not a licence to remove them.
+const MAX_OPEN_WIDTH = 800;
+const MAX_OPEN_HEIGHT = 720;
 const DEFAULT_WIDTH = 280;
 const DEFAULT_HEIGHT = 380;
 const PERSIST_DEBOUNCE_MS = 400;

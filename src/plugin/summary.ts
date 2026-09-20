@@ -54,10 +54,13 @@ async function findSummarySticky(): Promise<StickyNode | null> {
   return null;
 }
 
-function tagSummary(sticky: StickyNode) {
+// The page is passed in rather than read here: by the time this runs the
+// user may have switched pages, and the id belongs to the page the sticky
+// is actually on.
+function tagSummary(sticky: StickyNode, page: PageNode) {
   sticky.setPluginData(SUMMARY_ROLE_KEY, SUMMARY_ROLE);
   sticky.name = 'Session Summary';
-  figma.currentPage.setPluginData(PAGE_SUMMARY_ID_KEY, sticky.id);
+  page.setPluginData(PAGE_SUMMARY_ID_KEY, sticky.id);
 }
 
 // Runs are chained, never concurrent. Two quick clicks on Update summary
@@ -79,6 +82,11 @@ export function updateSummary(raw: string): Promise<void> {
 // chat is what expires.
 async function runUpdate(raw: string) {
   const text = typeof raw === 'string' ? raw : String(raw || '');
+  // Every lookup below reads figma.currentPage, which the user can change
+  // under us during any await. Pin the page we started on so a page switch
+  // mid-write cannot adopt the new page's summary, delete the sticky we just
+  // made on the old one, and stamp this text over someone else's.
+  const startedOn = figma.currentPage;
   let sticky: StickyNode | null = null;
   let created = false;
   try {
@@ -103,7 +111,7 @@ async function runUpdate(raw: string) {
       // the sticky we already made.
       let arrived: StickyNode | null = null;
       try {
-        arrived = await findSummarySticky();
+        arrived = figma.currentPage === startedOn ? await findSummarySticky() : null;
       } catch {
         arrived = null;
       }
@@ -121,7 +129,7 @@ async function runUpdate(raw: string) {
     return;
   }
 
-  tagSummary(sticky);
+  tagSummary(sticky, startedOn);
   if (created) {
     sticky.x = Math.round(figma.viewport.center.x - sticky.width / 2);
     sticky.y = Math.round(figma.viewport.center.y - sticky.height / 2);

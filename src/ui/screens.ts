@@ -60,8 +60,14 @@ onPaint(paintSession);
 export function showConnecting() {
   setMode('connecting');
   const err = state.banner && state.banner.kind === 'error' ? state.banner.text : '';
-  const line =
-    state.ws === 'reconnecting'
+  // A halt before the first snapshot is the common case, not the rare one:
+  // room_full arrives in answer to the very first join. This screen has no
+  // footer, so without its own copy of the control the user would be told
+  // what went wrong and given no way to act on it.
+  const halted = !!(state.banner && state.banner.action === 'reconnect');
+  const line = halted
+    ? 'Not connected.'
+    : state.ws === 'reconnecting'
       ? 'Reconnecting to this board\'s session...'
       : 'Joining this board\'s session...';
   render(
@@ -70,10 +76,14 @@ export function showConnecting() {
     '<div class="idle-duck" aria-hidden="true">' + duckSvg(72) + '</div>' +
     '<div>' + escapeHtml(line) + '</div>' +
     (err ? '<div class="bubble err">' + escapeHtml(err) + '</div>' : '') +
+    (halted ? '<button type="button" id="reconnect" class="primary">Reconnect</button>' : '') +
     '</div>' +
     minimizeButton() +
     '</div>'
   );
+  if (state.minimized) return;
+  const reconnect = document.getElementById('reconnect');
+  if (reconnect) reconnect.onclick = () => reconnectSession();
 }
 
 export function openSettings() {
