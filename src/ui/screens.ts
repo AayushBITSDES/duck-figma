@@ -88,6 +88,8 @@ export function showSettings() {
     '<div><label for="text-size">Text size</label>' +
     '<select id="text-size">' + textSizeOptions() + '</select></div>' +
     '<p class="muted tiny">Text size is saved on this device.</p>' +
+    '<div><button type="button" id="reset-size">Reset panel size</button></div>' +
+    '<p class="muted tiny">Drag the right or bottom edge to resize. If the panel ends up bigger than your Figma window, reset it here.</p>' +
     '</div>' +
     '<footer class="ftr">' +
     '<button type="button" id="back" class="ghost">Back</button>' +
@@ -104,6 +106,8 @@ export function showSettings() {
     };
     size.focus();
   }
+  const resetSize = document.getElementById('reset-size');
+  if (resetSize) resetSize.onclick = () => post({ type: 'reset-size' });
   const back = document.getElementById('back');
   if (back) {
     back.onclick = () => {

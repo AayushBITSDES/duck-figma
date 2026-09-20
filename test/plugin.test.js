@@ -434,17 +434,18 @@ module.exports = async function run() {
   // A corrupt or absurd stored value must never produce an unusable panel.
   boot = bootPlugin({ duckWindow: { width: 10, height: 10, minimized: false } });
   await settled();
-  check('an undersized stored value is clamped up', boot.lastResize(), [240, 320]);
+  check('an undersized stored value is clamped up', boot.lastResize(), [200, 260]);
 
   boot = bootPlugin({ duckWindow: { width: 'nonsense', height: null, minimized: false } });
   await settled();
   check('a corrupt stored value falls back to the default', boot.lastResize(), [280, 380]);
 
-  // A stored value must never produce a panel too large for its own resize
-  // grip and minimize button to stay on screen, either.
+  // A stored value must never produce an absurd panel, either. Settings is
+  // anchored to the top left and so stays reachable at any size; its reset
+  // button is what rescues a panel bigger than the Figma window.
   boot = bootPlugin({ duckWindow: { width: 999999, height: 999999, minimized: false } });
   await settled();
-  check('an oversized stored value is clamped down on restore', boot.lastResize(), [800, 720]);
+  check('an oversized stored value is clamped down on restore', boot.lastResize(), [1400, 1000]);
 
   boot = bootPlugin({ duckWindow: { width: 300, height: 400, minimized: true } });
   await settled();
@@ -501,12 +502,37 @@ module.exports = async function run() {
   boot = bootPlugin({});
   await settled();
   boot.send({ type: 'resize', width: 50, height: 50 });
-  check('a resize below the minimum is clamped', boot.lastResize(), [240, 320]);
+  check('a resize below the minimum is clamped', boot.lastResize(), [200, 260]);
 
   boot = bootPlugin({});
   await settled();
   boot.send({ type: 'resize', width: 999999, height: 999999 });
-  check('a resize above the maximum is clamped', boot.lastResize(), [800, 720]);
+  check('a resize above the maximum is clamped', boot.lastResize(), [1400, 1000]);
+
+  // Width and height move independently, so an edge grip can widen the panel
+  // without dragging its height along.
+  boot = bootPlugin({ duckWindow: { width: 300, height: 400, minimized: false } });
+  await settled();
+  boot.send({ type: 'resize', width: 700, height: 400 });
+  check('a width-only drag leaves the height alone', boot.lastResize(), [700, 400]);
+  boot.send({ type: 'resize', width: 700, height: 650 });
+  check('a height-only drag leaves the width alone', boot.lastResize(), [700, 650]);
+
+  // The escape hatch for a panel dragged bigger than the Figma window, where
+  // every right-anchored control is off screen.
+  boot = bootPlugin({ duckWindow: { width: 1200, height: 900, minimized: false } });
+  await settled();
+  boot.send({ type: 'reset-size' });
+  await settled();
+  check('reset-size returns the panel to the default', boot.lastResize(), [280, 380]);
+  check('and writes it through immediately', boot.state.duckWindow.width, 280);
+
+  // A panel minimized and then reset must come back open, not stay a duck.
+  boot = bootPlugin({ duckWindow: { width: 1200, height: 900, minimized: true } });
+  await settled();
+  boot.send({ type: 'reset-size' });
+  await settled();
+  check('reset-size also un-minimizes', boot.window(), { type: 'window', width: 280, height: 380, minimized: false, textSize: 11 });
 
   // A message handler should not trust the sender's claimed state: a resize
   // arriving while minimized (a lost pointerup leaving a drag stuck active,

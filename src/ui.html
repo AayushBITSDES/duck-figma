@@ -135,10 +135,18 @@
   button.mini:hover { opacity: 1; }
 
   /* Figma gives a plugin window no resize handle of its own and fires no
-     resize event, so the panel has to draw its own grip and ask the plugin
-     to resize. Kept out of #root so it survives every screen repaint. */
-  #grip { position: fixed; right: 0; bottom: 0; width: 14px; height: 14px;
-    cursor: nwse-resize; touch-action: none; }
+     resize event, so the panel has to draw its own grips and ask the plugin
+     to resize. Kept out of #root so they survive every screen repaint.
+     Three of them: the corner drives both axes, the edges lock to one, so
+     widening the panel doesn't drag its height along for the ride. */
+  #grip-e, #grip-s, #grip { position: fixed; touch-action: none; }
+  /* 6px strips. The body's own padding is 12px and the minimize button sits
+     6px in from the right at 18px wide, so neither strip covers a control. */
+  #grip-e { top: 0; right: 0; width: 6px; height: 100vh; cursor: ew-resize; }
+  #grip-s { left: 0; bottom: 0; height: 6px; width: 100vw; cursor: ns-resize; }
+  /* Last so it wins the overlap at the corner where all three meet. */
+  #grip { right: 0; bottom: 0; width: 14px; height: 14px;
+    cursor: nwse-resize; }
   #grip::after { content: ''; position: absolute; right: 3px; bottom: 3px;
     width: 6px; height: 6px;
     border-right: 1.5px solid var(--figma-color-text-secondary);
@@ -149,11 +157,13 @@
      #grip") can ever reach it. bridge.ts toggles this class on <body> in
      step with state.minimized instead, which display:none then makes fully
      inert: no cursor, no hit target, dragging or clicking it does nothing. */
-  body.min #grip { display: none; }
+  body.min #grip, body.min #grip-e, body.min #grip-s { display: none; }
 </style>
 </head>
 <body>
 <div id="root"></div>
+<div id="grip-e" role="separator" aria-label="Resize panel width"></div>
+<div id="grip-s" role="separator" aria-label="Resize panel height"></div>
 <div id="grip" role="separator" aria-label="Resize panel"></div>
 </body>
 </html>
