@@ -18,7 +18,7 @@ export const PRODUCTION_WS_ORIGIN = 'wss://duck-facilitator.aayushkggn.workers.d
 // `npx wrangler dev` on the default port. Flip this flag to talk to it —
 // the plugin iframe origin is null, so hostname sniffing cannot choose
 // local for you. Do not put secrets here; the Worker holds the model key.
-export const LOCAL_WS_ORIGIN = 'ws://127.0.0.1:8787';
+export const LOCAL_WS_ORIGIN = 'ws://localhost:8787';
 export const USE_LOCAL_WORKER = false;
 
 const PING_MS = 20_000;

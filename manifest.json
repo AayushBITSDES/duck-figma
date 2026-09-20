@@ -13,9 +13,7 @@
     ],
     "devAllowedDomains": [
       "http://localhost:8787",
-      "http://127.0.0.1:8787",
-      "ws://localhost:8787",
-      "ws://127.0.0.1:8787"
+      "ws://localhost:8787"
     ],
     "reasoning": "Connects to the hosted group-session Worker so teammates in this FigJam file can share presence, chat, and facilitator rounds. Localhost is only used while developing against wrangler."
   }
