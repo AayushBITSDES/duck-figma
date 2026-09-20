@@ -1,33 +1,76 @@
 # Duck Check-In
 
-A rubber duck that sits in your FigJam board and notices when you get stuck.
+A temporary group facilitator for FigJam.
 
-It watches for you going quiet. After 20 seconds with no cursor movement, no
-panning and no edits, it asks how you're doing. It reads the text on your board
-too, so it can ask about the sticky you've been circling rather than something
-generic. Rubber duck debugging, with the duck deciding when to ask.
+Everyone who opens the plugin in the same file joins one shared session. Each
+round waits for every connected participant to contribute or pass, then the
+duck responds once to the group. Nothing monitors cursor movement, viewport
+changes, motion, or inactivity.
 
-## Installing it
+The Worker keeps chat state temporarily. **Update summary** creates one Session
+Summary sticky on the board and updates that same sticky on later clicks.
 
-You need the Figma **desktop app**. The browser version cannot load a plugin
-from a folder.
+## Install dependencies
 
-1. Download this project to your computer.
-2. Open a FigJam file in the desktop app.
-3. Go to Plugins > Development > Import plugin from manifest.
-4. Choose the `manifest.json` file inside the folder you downloaded.
+Use Node 22:
 
-The duck now appears under Plugins > Development > Duck Check-In. You only do
-this once.
+```sh
+npm ci
+npm ci --prefix worker
+```
 
-## Talking to it
+Run every automated check with:
 
-It works right away, though its replies come from a fixed script.
+```sh
+npm run verify
+```
 
-For a real conversation, open Settings in the panel and paste in an API key.
-OpenRouter has a free tier; OpenAI, Anthropic and Google AI Studio also work.
-Your key stays on your own machine.
+## Test locally in FigJam
 
-## Working on the code
+1. Create `worker/.dev.vars` containing `OPENAI_API_KEY=...`. This file is
+   ignored by Git; never commit or paste the key into plugin code.
+2. Start the local backend:
 
-`npm install`, then `npm run build`. `npm test` runs the checks.
+   ```sh
+   npm --prefix worker run dev
+   ```
+
+3. In `src/ui/session.ts`, set `USE_LOCAL_WORKER` to `true`, then build:
+
+   ```sh
+   npm run build
+   ```
+
+4. In the Figma desktop app, open a FigJam file and choose
+   **Plugins > Development > Import plugin from manifest**, then select this
+   repository's `manifest.json`.
+5. Have a second Figma user import the same development plugin and open it in
+   the same FigJam file.
+6. Confirm both names appear, choose a state in each window, and verify the
+   facilitator responds only after both people act. In the next round, test a
+   contribution and **Pass**.
+7. Click **Update summary** twice and confirm there is still only one Session
+   Summary sticky and its text changes.
+8. Close both plugin windows, wait more than 30 seconds, reopen them, and
+   confirm the temporary chat is empty while the board summary remains.
+
+Set `USE_LOCAL_WORKER` back to `false` and rebuild before committing.
+
+## Deploy the Worker
+
+Authenticate Wrangler, add the secret, and deploy:
+
+```sh
+cd worker
+npx wrangler login
+npx wrangler secret put OPENAI_API_KEY
+npm run deploy
+```
+
+The hosted Worker is `duck-facilitator.aayushkggn.workers.dev`. That hostname
+is already in `manifest.json` and `src/ui/session.ts`. If it changes, update
+both places and run `npm run verify`. They must match or Figma will block
+the WebSocket.
+
+The plugin never receives the OpenAI key. The Worker selects the model through
+its non-secret `OPENAI_MODEL` setting.

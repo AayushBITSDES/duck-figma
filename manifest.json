@@ -5,14 +5,18 @@
   "main": "dist/code.js",
   "ui": "dist/ui.html",
   "editorType": ["figjam"],
-  "permissions": ["activeusers"],
+  "permissions": ["currentuser"],
   "networkAccess": {
     "allowedDomains": [
-      "https://openrouter.ai",
-      "https://api.openai.com",
-      "https://api.anthropic.com",
-      "https://generativelanguage.googleapis.com"
+      "https://duck-facilitator.aayushkggn.workers.dev",
+      "wss://duck-facilitator.aayushkggn.workers.dev"
     ],
-    "reasoning": "Calls whichever model provider the user picks, using the user's own API key, so the duck can hold a live conversation."
+    "devAllowedDomains": [
+      "http://localhost:8787",
+      "http://127.0.0.1:8787",
+      "ws://localhost:8787",
+      "ws://127.0.0.1:8787"
+    ],
+    "reasoning": "Connects to the hosted group-session Worker so teammates in this FigJam file can share presence, chat, and facilitator rounds. Localhost is only used while developing against wrangler."
   }
 }

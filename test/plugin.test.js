@@ -1,118 +1,428 @@
 /*
  * Runs against the COMPILED output in .test-build, not a reimplementation.
  *
- * Boots the plugin entry (code.js, wiring board.js/idle.js/settings-store.js/
- * sticky.js) against a stubbed figma global, the same way FigJam's plugin
+ * Boots the plugin entry (code.js, wiring board.js/session.js/summary.js/
+ * window.ts) against a stubbed figma global, the same way FigJam's plugin
  * sandbox would load it, and inspects what it posts back to the UI and what
  * it writes to clientStorage.
  */
+const fs = require('fs');
 const path = require('path');
 const { check } = require('./lib/check');
 const { BUILD, clearBuildCache, clearPendingTimers } = require('./lib/fresh');
 
-function bootPlugin(store) {
+function makeSticky(id, extra) {
+  const data = {};
+  const node = {
+    id: id,
+    type: 'STICKY',
+    removed: false,
+    name: '',
+    x: 0, y: 0, width: 80, height: 80,
+    text: {
+      characters: '',
+      fontName: { family: 'Inter', style: 'Regular' },
+      getRangeAllFontNames: function () {
+        return this.characters.length ? [{ family: 'Inter', style: 'Regular' }] : [];
+      },
+    },
+    getPluginData: (k) => data[k] || '',
+    setPluginData: (k, v) => { data[k] = String(v); },
+    remove: () => { node.removed = true; },
+  };
+  return Object.assign(node, extra || {});
+}
+
+function makeFigma(opts) {
+  opts = opts || {};
+  const store = Object.assign({}, opts.store || {});
+  const rootData = Object.assign({}, opts.rootData || {});
+  const pageData = Object.assign({}, opts.pageData || {});
+  const nodes = (opts.nodes || []).slice();
+  const nodeById = Object.assign({}, opts.nodeById || {});
+  const sent = [];
+  const resizes = [];
+  const notifies = [];
+  const stickies = [];
+  const accessed = { activeUsers: false, findAll: 0, findAllWithCriteria: 0 };
+  const listeners = { documentchange: [], currentpagechange: [] };
+  let nextStickyId = 1;
+
+  const page = {
+    id: opts.pageId || 'page-1',
+    type: 'PAGE',
+    findAll: (pred) => {
+      accessed.findAll += 1;
+      return typeof pred === 'function' ? nodes.filter(pred) : nodes.slice();
+    },
+    findAllWithCriteria: (query) => {
+      accessed.findAllWithCriteria += 1;
+      const types = (query && query.types) || [];
+      return nodes.filter((n) => types.indexOf(n.type) !== -1);
+    },
+    selection: [],
+    getPluginData: (k) => pageData[k] || '',
+    setPluginData: (k, v) => { pageData[k] = String(v); },
+  };
+
+  const figma = {
+    showUI: () => {},
+    on: (type, fn) => {
+      if (!listeners[type]) listeners[type] = [];
+      listeners[type].push(fn);
+    },
+    notify: (m) => notifies.push(m),
+    fileKey: opts.fileKey,
+    currentUser: opts.currentUser,
+    root: {
+      getPluginData: (k) => rootData[k] || '',
+      setPluginData: (k, v) => { rootData[k] = String(v); },
+    },
+    currentPage: page,
+    viewport: { center: { x: opts.cx || 0, y: opts.cy || 0 } },
+    ui: {
+      postMessage: (m) => sent.push(m),
+      onmessage: null,
+      resize: (w, h) => resizes.push([w, h]),
+    },
+    clientStorage: {
+      getAsync: async (k) => (k in store ? store[k] : undefined),
+      setAsync: async (k, v) => { store[k] = v; },
+      deleteAsync: async (k) => { delete store[k]; },
+    },
+    createSticky: () => {
+      const sticky = makeSticky('s' + nextStickyId++, { parent: page });
+      stickies.push(sticky);
+      nodes.push(sticky);
+      nodeById[sticky.id] = sticky;
+      return sticky;
+    },
+    loadFontAsync: opts.loadFontAsync || (async () => {}),
+    getNodeByIdAsync: async (id) => nodeById[id] || null,
+    mixed: { mixed: true },
+  };
+  Object.defineProperty(figma, 'activeUsers', {
+    get() { accessed.activeUsers = true; return []; },
+    configurable: true,
+  });
+
+  return {
+    figma, store, rootData, pageData, nodes, nodeById, sent, resizes, notifies,
+    stickies, accessed,
+    edit: (origin) => {
+      (listeners.documentchange || []).forEach((fn) => fn({ documentChanges: [{ origin: origin }] }));
+    },
+    changePage: (id) => {
+      page.id = id;
+      (listeners.currentpagechange || []).forEach((fn) => fn());
+    },
+  };
+}
+
+function bootPlugin(store, opts) {
   // A previous boot may still have a debounced clientStorage write pending
   // (window.ts's PERSIST_DEBOUNCE_MS); see the comment in lib/fresh.js for
   // why that timer has to be swept before this boot's global.figma goes in.
   clearPendingTimers();
   clearBuildCache();
-  const state = Object.assign({}, store);
-  const sent = [];
-  const resizes = [];
+  const env = makeFigma(Object.assign({ store: store || {} }, opts || {}));
+  let intervals = 0;
   const realSetInterval = global.setInterval;
-  let poll = null;
-  global.setInterval = (fn) => { poll = fn; return 0; };
+  global.setInterval = (fn) => { intervals++; return 0; };
   global.__html__ = '<html></html>';
-  let docChange = null;
-  global.figma = {
-    showUI: () => {},
-    // The real figma.on hands documentchange a DocumentChangeEvent. The old
-    // stub swallowed the handler, so nothing in here could reach that path.
-    on: (type, fn) => { if (type === 'documentchange') docChange = fn; },
-    notify: () => {},
-    currentPage: { findAll: () => [], selection: [] },
-    viewport: { center: { x: 0, y: 0 } },
-    activeUsers: [],
-    ui: { postMessage: (m) => sent.push(m), onmessage: null, resize: (w, h) => resizes.push([w, h]) },
-    clientStorage: {
-      getAsync: async (k) => (k in state ? state[k] : undefined),
-      setAsync: async (k, v) => { state[k] = v; },
-      deleteAsync: async (k) => { delete state[k]; },
-    },
-    createSticky: () => ({ text: {}, remove: () => {} }),
-    loadFontAsync: async () => {},
-  };
-  const stub = global.figma;
+  global.figma = env.figma;
   require(path.join(BUILD, 'plugin', 'code'));
   global.setInterval = realSetInterval;
   return {
-    state: state,
-    send: (m) => stub.ui.onmessage(m),
-    settings: () => sent.filter((m) => m.type === 'settings').pop(),
-    window: () => sent.filter((m) => m.type === 'window').pop(),
-    resizes: resizes,
-    lastResize: () => resizes[resizes.length - 1],
-    checkins: () => sent.filter((m) => m.type === 'checkin'),
-    resumes: () => sent.filter((m) => m.type === 'resume'),
-    // One edit in the file, from this user ('LOCAL') or anyone else ('REMOTE').
-    edit: (origin) => docChange && docChange({ documentChanges: [{ origin: origin }] }),
-    // Jump past the idle threshold and run one poll tick, rather than
-    // holding the suite up for the real 20 seconds.
-    idleTick: () => {
-      const realNow = Date.now;
-      Date.now = () => realNow() + 60 * 1000;
-      try { poll(); } finally { Date.now = realNow; }
-    },
+    env: env,
+    state: env.store,
+    send: (m) => env.figma.ui.onmessage(m),
+    window: () => env.sent.filter((m) => m.type === 'window').pop(),
+    session: () => env.sent.filter((m) => m.type === 'session').pop(),
+    lastResize: () => env.resizes[env.resizes.length - 1],
+    resizes: env.resizes,
+    intervals: intervals,
+    accessed: env.accessed,
+    edit: env.edit,
+    sent: env.sent,
+    rootData: env.rootData,
+    notifies: env.notifies,
+    stickies: env.stickies,
   };
+}
+
+function loadPlugin(name, opts) {
+  clearPendingTimers();
+  clearBuildCache();
+  const env = makeFigma(opts || {});
+  global.figma = env.figma;
+  const mod = require(path.join(BUILD, 'plugin', name));
+  return { env, mod };
 }
 
 const settled = () => new Promise((r) => setTimeout(r, 0));
 
 module.exports = async function run() {
-  let boot = bootPlugin({ duckSettings: { provider: 'google', key: 'AIza' } });
-  await settled();
-  check('saved settings are handed to the UI', boot.settings().settings, { provider: 'google', key: 'AIza' });
+  // --- session identity -----------------------------------------------------
+  let { env, mod: sess } = loadPlugin('session', {
+    fileKey: '  FigFileKey  ',
+    currentUser: { name: 'Ada Lovelace' },
+    store: { duckClientId: 'client-01' },
+  });
+  const firstRoom = sess.resolveRoomId();
+  const mintedDespiteFileKey = env.rootData.duckRoomId;
+  check('a file key still mints opaque pluginData', typeof mintedDespiteFileKey, 'string');
+  check('and the room id is that token, not the file key', firstRoom, 'room:' + mintedDespiteFileKey);
+  check('and the guessable file key is not in the room id', firstRoom.indexOf('FigFileKey') === -1, true);
+  check('current user is the display name', sess.displayName(), 'Ada Lovelace');
+  await sess.bootSession();
+  check('boot posts the opaque document-scoped room', env.sent.filter((m) => m.type === 'session').pop(), {
+    type: 'session',
+    roomId: 'room:' + mintedDespiteFileKey,
+    clientId: 'client-01',
+    displayName: 'Ada Lovelace',
+  });
+  check('and reuses the stored client id', env.store.duckClientId, 'client-01');
 
-  boot = bootPlugin({});
-  await settled();
-  check('a fresh install starts on openrouter with no key',
-    boot.settings().settings, { provider: 'openrouter', key: '' });
-  check('and writes nothing to storage', Object.keys(boot.state).length, 0);
+  ({ env, mod: sess } = loadPlugin('session', {
+    fileKey: 'FigFileKey',
+    rootData: { duckRoomId: 'already-minted' },
+    currentUser: { name: '   ' },
+  }));
+  check('teammates share the stored pluginData even when a file key exists',
+    sess.resolveRoomId(), 'room:already-minted');
+  check('and still do not use the file key', sess.resolveRoomId().indexOf('FigFileKey') === -1, true);
+  check('a blank current user falls back to Anonymous', sess.displayName(), 'Anonymous');
 
-  // A key saved by an older build must survive the upgrade, not be deleted.
-  boot = bootPlugin({ anthropicApiKey: 'sk-ant-legacy' });
-  await settled();
-  check('a legacy key is migrated rather than destroyed',
-    boot.settings().settings, { provider: 'anthropic', key: 'sk-ant-legacy' });
-  check('and is persisted under the current name', boot.state.duckSettings.key, 'sk-ant-legacy');
-  check('with the old entry cleaned up', 'anthropicApiKey' in boot.state, false);
+  ({ env, mod: sess } = loadPlugin('session', {
+    rootData: { duckRoomId: 'already-minted' },
+  }));
+  check('without a file key, document pluginData is still the room', sess.resolveRoomId(), 'room:already-minted');
 
-  // The per-provider shape an earlier build on this branch wrote.
-  boot = bootPlugin({ duckSettings: { provider: 'openai', keys: { openai: 'sk-o', google: 'AIza' } } });
-  await settled();
-  check('the older per-provider shape is read through',
-    boot.settings().settings, { provider: 'openai', key: 'sk-o' });
+  ({ env, mod: sess } = loadPlugin('session', {
+    currentUser: { name: 'A'.repeat(80) },
+  }));
+  check('an overlong display name is clipped to 40', sess.displayName().length, 40);
+  await sess.bootSession();
+  const minted = env.rootData.duckRoomId;
+  check('a first open mints pluginData', typeof minted, 'string');
+  check('and posts a room-prefixed id', env.sent.filter((m) => m.type === 'session').pop().roomId, 'room:' + minted);
+  check('a second resolve reuses that id', sess.resolveRoomId(), 'room:' + minted);
 
-  // A key the user deliberately cleared must stay cleared, even if a legacy
-  // entry survived an earlier failed cleanup.
-  boot = bootPlugin({ duckSettings: { provider: 'google', key: '' }, anthropicApiKey: 'sk-ant-old' });
-  await settled();
-  check('an explicitly cleared key is not resurrected from a legacy entry',
-    boot.settings().settings, { provider: 'google', key: '' });
-  check('and the stale legacy entry is cleaned up', 'anthropicApiKey' in boot.state, false);
+  ({ env, mod: sess } = loadPlugin('session', {}));
+  Object.defineProperty(env.figma, 'currentUser', {
+    get() { throw new Error('no permission'); },
+  });
+  check('a missing currentuser permission falls back to Anonymous', sess.displayName(), 'Anonymous');
 
-  // Saving writes the whole of the settings, so there is nothing to merge.
-  boot = bootPlugin({ duckSettings: { provider: 'openrouter', key: 'old' } });
+  ({ env, mod: sess } = loadPlugin('session', { store: { duckClientId: 'short' } }));
+  await sess.bootSession();
+  check('an undersized stored client id is rejected and replaced',
+    [env.store.duckClientId === 'short', /^[A-Za-z0-9-]{8,64}$/.test(env.store.duckClientId)],
+    [false, true]);
+
+  ({ env, mod: sess } = loadPlugin('session', { store: { duckClientId: 'spaces not ok' } }));
+  await sess.bootSession();
+  check('a stored client id with spaces is rejected', env.store.duckClientId === 'spaces not ok', false);
+
+  const race = bootPlugin({ duckClientId: 'client-01' }, {
+    fileKey: 'FileA',
+    rootData: { duckRoomId: 'aaa' },
+  });
   await settled();
-  boot.send({ type: 'save-settings', provider: 'google', key: 'AIza-new' });
+  check('code.ts posts the opaque room on boot, not the file key', race.session().roomId, 'room:aaa');
+  race.rootData.duckRoomId = 'bbb';
+  race.edit('REMOTE');
+  check('a remote pluginData write switches the posted room', race.session().roomId, 'room:bbb');
+  const sessionPosts = race.sent.filter((m) => m.type === 'session').length;
+  race.edit('LOCAL');
+  check('a local documentchange does not rebroadcast session',
+    race.sent.filter((m) => m.type === 'session').length, sessionPosts);
+
+  const named = bootPlugin({ duckClientId: 'client-99' }, {
+    fileKey: 'FileA',
+    currentUser: { name: 'Grace' },
+    rootData: { duckRoomId: 'shared-token' },
+  });
   await settled();
-  check('a save replaces the settings outright',
-    boot.state.duckSettings, { provider: 'google', key: 'AIza-new' });
+  check('code.ts posts opaque room, client id, and current user together', named.session(), {
+    type: 'session',
+    roomId: 'room:shared-token',
+    clientId: 'client-99',
+    displayName: 'Grace',
+  });
+  check('and leaves the guessable file key out of the room id',
+    named.session().roomId.indexOf('FileA') === -1, true);
+
+  // --- no activeUsers / motion / idle ---------------------------------------
+  const pluginSrc = ['code', 'session', 'board', 'summary', 'window']
+    .map((n) => fs.readFileSync(path.join(BUILD, 'plugin', n + '.js'), 'utf8'))
+    .join('\n');
+  check('plugin entry does not load an idle module', /require\(['"]\.\/idle['"]\)/.test(pluginSrc), false);
+  check('plugin source never reads activeUsers', pluginSrc.indexOf('activeUsers') > -1, false);
+  check('plugin source never starts idle watch', pluginSrc.indexOf('startIdleWatch') > -1, false);
+
+  const quiet = bootPlugin({ duckClientId: 'client-01' }, { fileKey: 'F' });
+  await settled();
+  quiet.send({ type: 'mode', mode: 'idle' });
+  quiet.edit('LOCAL');
+  quiet.edit('REMOTE');
+  check('boot never starts an idle poll', quiet.intervals, 0);
+  check('and never reads activeUsers', quiet.accessed.activeUsers, false);
+  check('and never posts a check-in or resume',
+    quiet.sent.filter((m) => m.type === 'checkin' || m.type === 'resume').length, 0);
+
+  // --- board contract -------------------------------------------------------
+  const long = 'x'.repeat(250);
+  const many = [];
+  for (let i = 0; i < 45; i++) many.push({ type: 'TEXT', characters: 'n' + i });
+  const { env: boardEnv, mod: board } = loadPlugin('board', {
+    nodes: [
+      { type: 'STICKY', text: { characters: '  sticky note  ' } },
+      { type: 'TEXT', characters: 'plain text' },
+      { type: 'SHAPE_WITH_TEXT', text: { characters: 'shape copy' } },
+      { type: 'CODE_BLOCK', code: 'const x = 1' },
+      { type: 'SECTION', name: 'Onboarding' },
+      { type: 'TEXT', characters: '   ' },
+      { type: 'TEXT', characters: long },
+      { type: 'RECTANGLE' },
+    ].concat(many),
+  });
+  check('board caps match the protocol', [board.MAX_BOARD_ITEMS, board.MAX_ITEM_LENGTH], [40, 200]);
+  const items = board.getBoardItems();
+  check('text-bearing types are collected and trimmed',
+    items.slice(0, 5), ['sticky note', 'plain text', 'shape copy', 'const x = 1', 'Onboarding']);
+  check('blank text is skipped', items.indexOf('') > -1, false);
+  check('each item is clipped to 200 characters', items[5], 'x'.repeat(200));
+  check('and the list stops at 40', items.length, 40);
+  check('board reads typed nodes instead of walking every child',
+    [boardEnv.accessed.findAllWithCriteria > 0, boardEnv.accessed.findAll], [true, 0]);
+  const walks = boardEnv.accessed.findAllWithCriteria;
+  const again = board.getBoardItems();
+  check('a second read reuses the recent snapshot', again, items);
+  check('and does not walk the page again', boardEnv.accessed.findAllWithCriteria, walks);
+  board.sendBoard();
+  check('sendBoard posts the snapshot the UI asked for',
+    boardEnv.sent.filter((m) => m.type === 'board-context').pop(), { type: 'board-context', board: items });
+  boardEnv.changePage('page-2');
+  board.getBoardItems();
+  check('switching pages walks again', boardEnv.accessed.findAllWithCriteria, walks + 1);
+  const afterPage = boardEnv.accessed.findAllWithCriteria;
+  board.getBoardItems();
+  check('the new page snapshot is reused', boardEnv.accessed.findAllWithCriteria, afterPage);
+  boardEnv.nodes.unshift({ type: 'TEXT', characters: 'just added' });
+  boardEnv.edit('LOCAL');
+  const afterEdit = board.getBoardItems();
+  check('a document change walks again', boardEnv.accessed.findAllWithCriteria > afterPage, true);
+  check('and includes the new text', afterEdit[0], 'just added');
+
+  const viaCode = bootPlugin({ duckClientId: 'client-01' }, { fileKey: 'F' });
+  await settled();
+  viaCode.send({ type: 'get-board' });
+  check('get-board from the UI re-reads the page',
+    viaCode.sent.filter((m) => m.type === 'board-context').length >= 2, true);
+
+  // --- one living summary sticky --------------------------------------------
+  let { env: sumEnv, mod: summary } = loadPlugin('summary', { cx: 100, cy: 200 });
+  await summary.updateSummary('First pass');
+  check('a missing summary creates one sticky', sumEnv.stickies.length, 1);
+  const living = sumEnv.stickies[0];
+  check('tagged as the session summary', [living.name, living.getPluginData('duckRole')],
+    ['Session Summary', 'session-summary']);
+  check('with the text written through', living.text.characters, 'First pass');
+  check('placed at the viewport center', [living.x, living.y], [60, 160]);
+  check('and remembered on the page', sumEnv.pageData.duckSummaryNodeId, living.id);
+  check('and reported to the UI',
+    sumEnv.sent.filter((m) => m.type === 'summary-updated').pop(), { type: 'summary-updated', nodeId: living.id });
+  check('with a created-notify', sumEnv.notifies[sumEnv.notifies.length - 1],
+    'Dropped the session summary on your board.');
+
+  const createdX = living.x;
+  living.x = 12;
+  await summary.updateSummary('Second pass');
+  check('a later update writes the same sticky', sumEnv.stickies.length, 1);
+  check('in place, without recreating it', living.text.characters, 'Second pass');
+  check('and without moving it', living.x, 12);
+  check('and notifies an update, not a drop', sumEnv.notifies[sumEnv.notifies.length - 1],
+    'Updated the session summary.');
+  living.x = createdX;
+
+  ({ env: sumEnv, mod: summary } = loadPlugin('summary', { cx: 100, cy: 200 }));
+  const otherPage = { type: 'PAGE' };
+  const moved = makeSticky('moved-off-page', { parent: otherPage });
+  moved.setPluginData('duckRole', 'session-summary');
+  moved.name = 'Session Summary';
+  moved.text.characters = 'Left behind';
+  sumEnv.nodeById[moved.id] = moved;
+  sumEnv.pageData.duckSummaryNodeId = moved.id;
+  await summary.updateSummary('Stays on this page');
+  check('a remembered sticky on another page is not updated', moved.text.characters, 'Left behind');
+  check('and a new summary is created on the current page', sumEnv.stickies.length, 1);
+  check('with the new text', sumEnv.stickies[0].text.characters, 'Stays on this page');
+  check('and the page now remembers the on-page sticky', sumEnv.pageData.duckSummaryNodeId, sumEnv.stickies[0].id);
+
+  ({ env: sumEnv, mod: summary } = loadPlugin('summary'));
+  const strayPage = { type: 'PAGE' };
+  const stray = makeSticky('stray-off-page', { parent: strayPage });
+  stray.setPluginData('duckRole', 'session-summary');
+  stray.text.characters = 'Other page';
+  sumEnv.nodeById[stray.id] = stray;
+  sumEnv.pageData.duckSummaryNodeId = stray.id;
+  const onPage = makeSticky('already-here', { parent: sumEnv.figma.currentPage });
+  onPage.setPluginData('duckRole', 'session-summary');
+  onPage.name = 'Session Summary';
+  onPage.text.characters = 'Here already';
+  sumEnv.nodes.push(onPage);
+  sumEnv.nodeById[onPage.id] = onPage;
+  await summary.updateSummary('Updated here');
+  check('an off-page remembered id falls through to the tagged sticky on this page',
+    [stray.text.characters, onPage.text.characters, sumEnv.stickies.length],
+    ['Other page', 'Updated here', 0]);
+  check('and remembers the on-page sticky', sumEnv.pageData.duckSummaryNodeId, onPage.id);
+
+  ({ env: sumEnv, mod: summary } = loadPlugin('summary'));
+  const section = { type: 'SECTION', parent: sumEnv.figma.currentPage };
+  const nested = makeSticky('nested-on-page', { parent: section });
+  nested.setPluginData('duckRole', 'session-summary');
+  nested.name = 'Session Summary';
+  nested.text.characters = 'Inside a section';
+  sumEnv.nodes.push(nested);
+  sumEnv.nodeById[nested.id] = nested;
+  sumEnv.pageData.duckSummaryNodeId = nested.id;
+  await summary.updateSummary('Still nested');
+  check('a nested sticky on the current page is reused', sumEnv.stickies.length, 0);
+  check('and updated in place', nested.text.characters, 'Still nested');
+
+  ({ env: sumEnv, mod: summary } = loadPlugin('summary'));
+  sumEnv.figma.createSticky = () => { throw new Error('no stickies'); };
+  await summary.updateSummary('nope');
+  check('a create failure reports an error',
+    sumEnv.sent.filter((m) => m.type === 'summary-error').pop(), {
+      type: 'summary-error',
+      message: "Couldn't create a session summary sticky.",
+    });
+
+  ({ env: sumEnv, mod: summary } = loadPlugin('summary'));
+  sumEnv.figma.loadFontAsync = async () => { throw new Error('font'); };
+  await summary.updateSummary('font-fail');
+  check('a font failure removes the sticky it just created', sumEnv.stickies[0].removed, true);
+  check('and reports the write error',
+    sumEnv.sent.filter((m) => m.type === 'summary-error').pop(), {
+      type: 'summary-error',
+      message: "Couldn't write that sticky: the font wouldn't load.",
+    });
+
+  const throughCode = bootPlugin({ duckClientId: 'client-01' }, { fileKey: 'F', cx: 0, cy: 0 });
+  await settled();
+  throughCode.send({ type: 'update-summary', text: 'From the UI' });
+  await settled();
+  check('update-summary from the UI creates the living sticky',
+    throughCode.stickies[0].text.characters, 'From the UI');
 
   // --- window geometry ------------------------------------------------------
   // Its own clientStorage key on purpose: see the STORE comment in window.ts.
 
-  boot = bootPlugin({});
+  let boot = bootPlugin({});
   await settled();
   check('with nothing stored the window opens at the default size', boot.lastResize(), [280, 380]);
   check('and reports itself to the UI', boot.window(), { type: 'window', width: 280, height: 380, minimized: false, textSize: 11 });
@@ -188,20 +498,6 @@ module.exports = async function run() {
   check('a minimize during the startup read is not undone by the snapshot', boot.window().minimized, true);
   check('and the panel stays collapsed', boot.lastResize(), [70, 70]);
 
-  // documentchange fires for every user in the file, not just this one. A
-  // teammate typing is not this user coming back to work, so it must not stand
-  // the check-in down, and it must not hold the idle timer open either.
-  boot = bootPlugin({});
-  await settled();
-  boot.send({ type: 'mode', mode: 'idle' });
-  boot.idleTick();
-  await settled();
-  check('the duck checks in once the board goes quiet', boot.checkins().length, 1);
-  boot.edit('REMOTE');
-  check('a teammate editing does not stand the check-in down', boot.resumes().length, 0);
-  boot.edit('LOCAL');
-  check('this user editing does', boot.resumes().length, 1);
-
   boot = bootPlugin({});
   await settled();
   boot.send({ type: 'resize', width: 50, height: 50 });
@@ -223,50 +519,8 @@ module.exports = async function run() {
   check('the panel stays at the collapsed size', boot.lastResize(), [70, 70]);
   check('and nothing is persisted from it', boot.state.duckWindow, { width: 300, height: 400, minimized: true });
 
-  // A check-in posted to a collapsed duck would land on a 70x70 window nobody
-  // can read, so it has to open the panel first, but only once the UI has
-  // reported itself idle (see the 'mode' entry in window.ts's MESSAGE
-  // CONTRACT). idle.ts fires purely off its own inactivity timer and has no
-  // idea what screen the UI is actually showing.
-  boot = bootPlugin({ duckWindow: { width: 300, height: 400, minimized: true } });
-  await settled();
-  check('the duck starts collapsed', boot.lastResize(), [70, 70]);
-  boot.send({ type: 'mode', mode: 'idle' });
-  boot.idleTick();
-  await settled();
-  check('a check-in pops the collapsed duck open once the UI is idle', boot.lastResize(), [300, 400]);
-  check('and the question is actually asked', boot.checkins().length, 1);
-
-  // The bug this guards against: collapse, go quiet long enough to trip the
-  // timer, but never hear from the UI that its mode is 'idle' (it could be
-  // mid-chat, in settings, anything). Popping the window open here would be
-  // pure noise: the UI is never going to show the question either way.
-  boot = bootPlugin({ duckWindow: { width: 300, height: 400, minimized: true } });
-  await settled();
-  boot.idleTick();
-  await settled();
-  check('an unreported UI mode does not expand the window', boot.lastResize(), [70, 70]);
-  check('the question is still posted; it is the UI\'s job to decide not to show it', boot.checkins().length, 1);
-
-  boot = bootPlugin({ duckWindow: { width: 300, height: 400, minimized: true } });
-  await settled();
-  boot.send({ type: 'mode', mode: 'chat' });
-  boot.idleTick();
-  await settled();
-  check('a check-in does not expand the window while the UI is in chat mode', boot.lastResize(), [70, 70]);
-
-  // The same tick must not resize a panel that is already open, or it would
-  // fight whatever the user just dragged it to.
-  boot = bootPlugin({ duckWindow: { width: 300, height: 400, minimized: false } });
-  await settled();
-  const openResizes = boot.resizes.length;
-  boot.idleTick();
-  await settled();
-  check('a check-in on an open panel resizes nothing', boot.resizes.length, openResizes);
-  check('but still asks', boot.checkins().length, 1);
-
   // Text size is a display preference, so it rides with the geometry rather
-  // than with duckSettings, whose saves have to stay whole-object.
+  // than with a settings object, whose saves have to stay whole-object.
   boot = bootPlugin({});
   await settled();
   boot.send({ type: 'text-size', size: 15 });
@@ -280,4 +534,9 @@ module.exports = async function run() {
   boot = bootPlugin({ duckWindow: { width: 300, height: 400, minimized: false, textSize: 16 } });
   await settled();
   check('a saved text size is restored on startup', boot.window().textSize, 16);
+
+  boot = bootPlugin({ duckSettings: { provider: 'openai', key: 'sk-secret' }, duckClientId: 'client-01' });
+  await settled();
+  check('legacy provider settings are ignored, not posted',
+    boot.sent.filter((m) => m.type === 'settings').length, 0);
 };

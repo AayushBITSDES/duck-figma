@@ -23,16 +23,58 @@ const els = {};
 // startup, so only 'root' itself (never part of its own content) resolves.
 let currentHtml = '';
 
+function collectIds(html) {
+  const out = new Set();
+  const re = /id="([^"]+)"/g;
+  let m;
+  while ((m = re.exec(html || ''))) out.add(m[1]);
+  return out;
+}
+
+function replaceIdInner(html, id, inner) {
+  const needle = 'id="' + id + '"';
+  const at = html.indexOf(needle);
+  if (at < 0) return html;
+  const open = html.lastIndexOf('<', at);
+  const tagMatch = /^<([a-zA-Z0-9]+)/.exec(html.slice(open));
+  if (!tagMatch || open < 0) return html;
+  const close = html.indexOf('</' + tagMatch[1] + '>', at);
+  if (close < 0) return html;
+  const gt = html.indexOf('>', at);
+  if (gt < 0 || gt > close) return html;
+  return html.slice(0, gt + 1) + inner + html.slice(close);
+}
+
+function syncChild(id, nextInner) {
+  const prevInner = els[id] ? els[id]._html : '';
+  const gone = collectIds(prevInner);
+  const keep = collectIds(nextInner);
+  gone.forEach((childId) => {
+    if (!keep.has(childId) && childId !== id) delete els[childId];
+  });
+  currentHtml = replaceIdInner(currentHtml, id, nextInner);
+  if (els.root) els.root._html = currentHtml;
+}
+
 function el(id) {
   if (!els[id]) {
     els[id] = {
       id: id, value: '', dataset: {}, scrollTop: 0, scrollHeight: 0,
-      onclick: null, onchange: null, oninput: null, _html: '',
-      set innerHTML(v) { this._html = v; if (id === 'root') rerender(v); },
+      onclick: null, onchange: null, oninput: null, focus: () => {}, _html: '',
+      attrs: {},
+      set innerHTML(v) {
+        if (id !== 'root') syncChild(id, v);
+        this._html = v;
+        if (id === 'root') rerender(v);
+      },
       get innerHTML() { return this._html; },
       set textContent(v) {
-        this._html = String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const html = String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        if (id !== 'root') syncChild(id, html);
+        this._html = html;
       },
+      setAttribute(name, value) { this.attrs[name] = String(value); },
+      getAttribute(name) { return this.attrs[name]; },
     };
   }
   return els[id];
@@ -43,10 +85,8 @@ function rerender(html) {
   currentHtml = html;
   for (const k of Object.keys(els)) if (k !== 'root') delete els[k];
   const unescape = (v) => v.replace(/&quot;/g, '"').replace(/&amp;/g, '&');
-  const input = /id="key-input"[^>]*\svalue="([^"]*)"/.exec(html);
-  if (input) el('key-input').value = unescape(input[1]);
   const selected = /<option value="([^"]+)" selected>/.exec(html);
-  if (selected) el('provider').value = selected[1];
+  if (selected) el('text-size').value = unescape(selected[1]);
 }
 
 // The gate a real getElementById applies before this stub hands back
@@ -70,27 +110,31 @@ const body = {
 };
 
 const posted = [];
-let lastCall = null;
-// Good enough for any scenario that exercises askDuck() only incidentally,
-// i.e. checking loading/mode transitions rather than reply content.
-let nextResponse = { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: 'ok' } }] }) };
+const windowListeners = [];
 
 function install() {
+  currentHtml = '';
+  for (const k of Object.keys(els)) delete els[k];
+  bodyClasses.clear();
+  posted.length = 0;
+  windowListeners.length = 0;
   global.document = {
     getElementById, createElement: () => el('tmp' + Math.random()), querySelectorAll: () => [], body,
+    activeElement: null,
     // applyTextSize's only touch on the DOM: a CSS variable on the root element.
     documentElement: { style: { setProperty: () => {} } },
   };
   global.parent = { postMessage: (m) => posted.push(m.pluginMessage) };
-  global.window = {};
-  global.fetch = async (url, opts) => { lastCall = { url, opts }; return nextResponse; };
+  global.window = {
+    addEventListener: (type, fn) => { windowListeners.push({ type, fn }); },
+  };
+  global.location = { hostname: 'www.figma.com' };
 }
 
 module.exports = {
   el,
   body,
   posted,
+  windowListeners,
   install,
-  setNextResponse: (r) => { nextResponse = r; },
-  getLastCall: () => lastCall,
 };

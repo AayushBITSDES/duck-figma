@@ -20,16 +20,6 @@
  *   {type: 'text-size', size}
  *     Set the panel's font size. Clamped to 9..18. Rides with the geometry
  *     rather than with settings; see the STORE comment below.
- *   {type: 'mode', mode}
- *     Sent whenever the UI's own state.mode changes (src/ui/state.ts's Mode
- *     type: 'idle' | 'settings' | 'checkin' | 'chat'). This is the only way
- *     the plugin finds out whether the UI is actually resting: bridge.ts
- *     shows the check-in screen only while its mode is 'idle', and idle.ts
- *     fires expandForCheckIn purely off its own inactivity timer, with no
- *     idea what the UI is showing. Posted by setMode() in src/ui/screens.ts,
- *     which every screen routes through so a new one cannot forget to report
- *     itself. None arrives until the UI's first render, so until then the
- *     plugin assumes it is not idle and never expands on a guess.
  *
  * plugin -> UI
  *   {type: 'window', width, height, minimized, textSize}
@@ -41,8 +31,8 @@
  *     to render and never has to guess at what figma.ui.resize actually
  *     applied (clamping included).
  *
- * Nothing here rides on 'settings' or duckSettings; see the STORE comment
- * below for why.
+ * Session identity ({type:'session'}) and summary upsert live in session.ts
+ * and summary.ts. This module never expands the window on its own.
  */
 
 const MINIMIZED_SIZE = 70; // figma.showUI's own hard floor for width; reused as the collapsed duck's fixed size.
@@ -64,21 +54,17 @@ const MIN_TEXT_SIZE = 9;
 const MAX_TEXT_SIZE = 18;
 
 // Its own clientStorage key, deliberately not folded into duckSettings.
-// settings-store.ts just went through a long run of fixes (see git log) to
-// make a settings save replace the whole object outright, specifically so
-// two saves can never race or clobber each other. Geometry saves happen on
-// every resize-drag tick, far more often than a settings save; sharing one
-// object with settings would reintroduce that exact race for an unrelated
-// reason. A separate key means the two can never interact at all.
+// Geometry saves happen on every resize-drag tick; a separate key means a
+// settings write (legacy or otherwise) can never race with a resize persist.
 const STORE = 'duckWindow';
 
 interface WindowGeometry {
   width: number;
   height: number;
   minimized: boolean;
-  // Text size lives here rather than in duckSettings for the same reason the
-  // rest of this does: it is a display preference the user nudges repeatedly,
-  // not a behaviour setting, and duckSettings saves must stay whole-object.
+  // Text size lives here rather than in a settings object: it is a display
+  // preference the user nudges repeatedly, and those saves must stay
+  // whole-object so two writes cannot clobber each other.
   textSize: number;
 }
 
@@ -92,11 +78,6 @@ let openWidth = DEFAULT_WIDTH;
 let openHeight = DEFAULT_HEIGHT;
 let minimized = false;
 let textSize = DEFAULT_TEXT_SIZE;
-
-// Last mode the UI reported via {type: 'mode'} (see the MESSAGE CONTRACT
-// above). Starts false: until the UI has told us otherwise, expandForCheckIn
-// must assume it is not idle, so it never expands the window on a guess.
-let uiIsIdle = false;
 
 // figma.ui.onmessage is live from code.ts's first tick, but initWindow's
 // clientStorage read only lands a few ticks later. Anything the user does in
@@ -152,9 +133,9 @@ function schedulePersist() {
   persistTimer = setTimeout(persistNow, PERSIST_DEBOUNCE_MS);
 }
 
-// Called once at startup, alongside loadSettings(). figma.showUI has
-// already opened at the hardcoded default in code.ts; once storage has been
-// read this resizes to whatever the user actually left it at.
+// Called once at startup. figma.showUI has already opened at the hardcoded
+// default in code.ts; once storage has been read this resizes to whatever
+// the user actually left it at.
 export function initWindow(): Promise<void> {
   return figma.clientStorage
     .getAsync(STORE)
@@ -219,25 +200,4 @@ export function handleTextSize(px: number) {
   textSize = clampText(Number.isFinite(px) ? px : DEFAULT_TEXT_SIZE);
   postWindow();
   persistNow();
-}
-
-// Called from code.ts when a {type: 'mode'} message arrives; see the
-// MESSAGE CONTRACT above.
-export function handleUiMode(mode: string) {
-  uiIsIdle = mode === 'idle';
-}
-
-// Called from idle.ts when a check-in fires while the duck is collapsed, so
-// the user actually sees it asking instead of the question landing on a
-// panel nobody can see. A no-op while already open: the duck must never
-// interrupt or resize a conversation someone has on screen (see idle.ts's
-// own comments about not stomping an in-flight screen).
-//
-// Also a no-op unless the UI has told us it is actually idle. idle.ts fires
-// this off its own inactivity timer with no idea what screen the UI is on;
-// popping the window open only for bridge.ts to ignore the question because
-// its mode wasn't 'idle' is exactly the bug this guards against.
-export function expandForCheckIn() {
-  if (!minimized || !uiIsIdle) return;
-  handleExpand();
 }

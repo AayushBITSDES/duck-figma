@@ -1,0 +1,19 @@
+{
+  "name": "duck-facilitator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "types": "wrangler types",
+    "test": "OPENAI_API_KEY=test-key vitest run --maxWorkers=1 --no-isolate",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p test/tsconfig.json"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.1.12",
+    "typescript": "5.9.2",
+    "vitest": "4.1.11",
+    "wrangler": "4.134.0"
+  }
+}

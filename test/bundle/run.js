@@ -5,9 +5,10 @@
  * first, and because they answer a different question. The unit tests compile
  * src/ to CommonJS and call its exports. These load the webpack ESM bundle
  * that FigJam actually loads, in a real DOM, and drive it with real pointer
- * and click events. A circular import that resolves fine under CommonJS, or a
- * control wired with addEventListener that no exported function touches, is
- * invisible to the unit tests and caught here.
+ * and click events over a fake session WebSocket. A circular import that
+ * resolves fine under CommonJS, or a control wired with addEventListener
+ * that no exported function touches, is invisible to the unit tests and
+ * caught here.
  */
 const fs = require('fs');
 const path = require('path');

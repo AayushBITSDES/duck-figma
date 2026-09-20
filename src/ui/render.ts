@@ -111,3 +111,42 @@ export function renderMarkdown(raw: string): string {
     .replace(/\x0e(\d+)\x0e/g, (_, i) => blocks[+i])
     .replace(/\x0f(\d+)\x0f/g, (_, i) => spans[+i]);
 }
+
+// Models ignore a no-dash instruction often enough that prompting alone is
+// not a fix, so facilitator text is rewritten on the way in. Stored
+// normalized rather than only at render time, so Update summary posts the
+// same cleaned string the bubble showed.
+//
+// Same fence shape the renderer treats as code, so a dash this function
+// leaves alone is exactly a dash the bubble will show as code.
+const FENCE = /```[^\n]*\n[\s\S]*?```/g;
+
+// Both dashes collapse to a plain hyphen. Spaced ("a - b") and unspaced
+// ("3-5") forms are preserved as they were written rather than forced into
+// one shape, since a number range and a clause break want different spacing.
+//
+// Only [ \t] is ever consumed around the dash, never \s: a model's list
+// reply opens each item with an em-dash right after the newline
+// ("\n\n\u2014 item"), and \s would eat that newline along with the dash,
+// flattening the list onto one line. The two sides are judged independently
+// (not "does either side have space, so both get one") so a dash sitting
+// right after a newline stays tight on that side while the space before the
+// next word is left alone.
+export function stripDashes(text: string): string {
+  let out = '';
+  let last = 0;
+  FENCE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = FENCE.exec(text))) {
+    out += stripProseDashes(text.slice(last, m.index)) + m[0];
+    last = m.index + m[0].length;
+  }
+  return out + stripProseDashes(text.slice(last));
+}
+
+function stripProseDashes(text: string): string {
+  return text.replace(
+    /([ \t]*)[\u2014\u2013]([ \t]*)/g,
+    (_match, before: string, after: string) => (before ? ' ' : '') + '-' + (after ? ' ' : '')
+  );
+}

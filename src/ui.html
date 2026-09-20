@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
 <meta charset="UTF-8" />
 <style>
@@ -35,6 +35,25 @@
   .ftr > button { width: 100%; }
   .muted { color: var(--figma-color-text-secondary); }
   .tiny { font-size: calc(var(--duck-font, 11px) - 1px); }
+
+  .presence {
+    flex: 0 0 auto;
+    display: flex; flex-wrap: wrap; gap: 4px;
+    padding: 8px 12px 0;
+  }
+  .chip {
+    border: 1px solid var(--figma-color-border);
+    border-radius: 999px;
+    padding: 2px 8px;
+    color: var(--figma-color-text-secondary);
+  }
+  .chip.you { color: var(--figma-color-text); }
+  .chip.done { background: var(--figma-color-bg-secondary); }
+  .round { flex: 0 0 auto; margin: 0; padding: 6px 12px 0; }
+  .stack { display: flex; flex-direction: column; gap: 2px; max-width: 82%; }
+  .turn.mine .stack { align-items: flex-end; }
+  .who { color: var(--figma-color-text-secondary); font-size: calc(var(--duck-font, 11px) - 1px); }
+  .stack .bubble { max-width: 100%; }
 
   button {
     /* min-height, not height: a fixed box clipped its own label the moment
@@ -86,10 +105,9 @@
   .bubble pre { margin: 0; overflow-x: auto; background: rgba(127, 127, 127, 0.16); border-radius: 6px; padding: 6px 8px; }
   .bubble pre code { background: none; padding: 0; }
 
-  /* The duck is the one hand-drawn thing in here. Let it breathe. */
-  .idle { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; height: 100%; }
-  .idle-duck { cursor: pointer; animation: bob 2.6s ease-in-out infinite; }
-  .idle-duck:hover { animation-play-state: paused; }
+  /* Connecting: the duck is chrome, not a control. */
+  .idle { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; height: 100%; padding: 12px; text-align: center; }
+  .idle-duck { animation: bob 2.6s ease-in-out infinite; }
   @keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
   @media (prefers-reduced-motion: reduce) { .idle-duck { animation: none; } }
 
@@ -99,6 +117,15 @@
     height: 100vh; cursor: pointer; animation: bob 2.6s ease-in-out infinite; }
   .collapsed:hover { animation-play-state: paused; }
   @media (prefers-reduced-motion: reduce) { .collapsed { animation: none; } }
+  /* The general button rule would otherwise give this a border, min-height,
+     and ellipsis — all wrong for a 70x70 icon that is the whole window. */
+  button.collapsed {
+    width: 100%; min-height: 0; padding: 0; border: none;
+    background: transparent; white-space: normal; overflow: visible;
+    text-overflow: clip; color: inherit;
+  }
+  button.collapsed:hover,
+  button.collapsed:disabled:hover { background: transparent; }
 
   /* min-height on button would win over this height, so it is reset here.
      This one is an icon, not a label: it should stay 18px at every text size. */
@@ -127,6 +154,6 @@
 </head>
 <body>
 <div id="root"></div>
-<div id="grip"></div>
+<div id="grip" role="separator" aria-label="Resize panel"></div>
 </body>
 </html>
