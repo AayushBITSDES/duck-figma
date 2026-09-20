@@ -412,6 +412,64 @@ module.exports = async function run() {
       message: "Couldn't write that sticky: the font wouldn't load.",
     });
 
+  // Two clicks on Update summary before the first finishes. Both used to
+  // look for a sticky, both used to miss, and both used to create one.
+  ({ env: sumEnv, mod: summary } = loadPlugin('summary', { cx: 0, cy: 0 }));
+  await Promise.all([summary.updateSummary('First click'), summary.updateSummary('Second click')]);
+  check('a double click writes one sticky, not two', sumEnv.stickies.length, 1);
+  check('and the later click is what survives', sumEnv.stickies[0].text.characters, 'Second click');
+
+  // Same race across the network: a collaborator's summary syncs in while
+  // our own font load is still pending.
+  ({ env: sumEnv, mod: summary } = loadPlugin('summary'));
+  const theirs = makeSticky('theirs', { parent: sumEnv.figma.currentPage });
+  theirs.setPluginData('duckRole', 'session-summary');
+  theirs.name = 'Session Summary';
+  let injected = false;
+  sumEnv.figma.loadFontAsync = async () => {
+    if (injected) return;
+    injected = true;
+    sumEnv.nodes.push(theirs);
+    sumEnv.nodeById[theirs.id] = theirs;
+  };
+  await summary.updateSummary('Ours');
+  check("a collaborator's sticky arriving mid-write is adopted", theirs.text.characters, 'Ours');
+  check('and the duplicate we made is removed', sumEnv.stickies[0].removed, true);
+  check('leaving the page pointed at the surviving sticky', sumEnv.pageData.duckSummaryNodeId, theirs.id);
+
+  // Switching pages while the font load is pending must not let the write
+  // wander: the adoption lookup reads figma.currentPage, so unpinned it
+  // could delete the sticky just made here and overwrite the other page's.
+  ({ env: sumEnv, mod: summary } = loadPlugin('summary'));
+  const pageTwoData = {};
+  const pageTwo = {
+    id: 'page-2',
+    type: 'PAGE',
+    selection: [],
+    getPluginData: (k) => pageTwoData[k] || '',
+    setPluginData: (k, v) => { pageTwoData[k] = String(v); },
+    findAll: (pred) => (typeof pred === 'function' ? [elsewhere].filter(pred) : [elsewhere]),
+  };
+  const elsewhere = makeSticky('page-two-summary', { parent: pageTwo });
+  elsewhere.setPluginData('duckRole', 'session-summary');
+  elsewhere.name = 'Session Summary';
+  elsewhere.text.characters = 'Page two summary';
+  sumEnv.nodeById[elsewhere.id] = elsewhere;
+  let switched = false;
+  sumEnv.figma.loadFontAsync = async () => {
+    if (switched) return;
+    switched = true;
+    sumEnv.figma.currentPage = pageTwo;
+  };
+  await summary.updateSummary('Started on page one');
+  check('a page switch mid-write leaves the other page alone',
+    elsewhere.text.characters, 'Page two summary');
+  check('and still writes the sticky it created', sumEnv.stickies[0].text.characters, 'Started on page one');
+  check('and does not delete it', sumEnv.stickies[0].removed, false);
+  check('and remembers it on the page it started from, not the one in view',
+    [sumEnv.pageData.duckSummaryNodeId, pageTwoData.duckSummaryNodeId],
+    [sumEnv.stickies[0].id, undefined]);
+
   const throughCode = bootPlugin({ duckClientId: 'client-01' }, { fileKey: 'F', cx: 0, cy: 0 });
   await settled();
   throughCode.send({ type: 'update-summary', text: 'From the UI' });
@@ -434,14 +492,15 @@ module.exports = async function run() {
   // A corrupt or absurd stored value must never produce an unusable panel.
   boot = bootPlugin({ duckWindow: { width: 10, height: 10, minimized: false } });
   await settled();
-  check('an undersized stored value is clamped up', boot.lastResize(), [240, 320]);
+  check('an undersized stored value is clamped up', boot.lastResize(), [200, 260]);
 
   boot = bootPlugin({ duckWindow: { width: 'nonsense', height: null, minimized: false } });
   await settled();
   check('a corrupt stored value falls back to the default', boot.lastResize(), [280, 380]);
 
-  // A stored value must never produce a panel too large for its own resize
-  // grip and minimize button to stay on screen, either.
+  // A stored value must never produce an absurd panel, either. Settings is
+  // anchored to the top left and so stays reachable at any size; its reset
+  // button is what rescues a panel bigger than the Figma window.
   boot = bootPlugin({ duckWindow: { width: 999999, height: 999999, minimized: false } });
   await settled();
   check('an oversized stored value is clamped down on restore', boot.lastResize(), [800, 720]);
@@ -501,12 +560,37 @@ module.exports = async function run() {
   boot = bootPlugin({});
   await settled();
   boot.send({ type: 'resize', width: 50, height: 50 });
-  check('a resize below the minimum is clamped', boot.lastResize(), [240, 320]);
+  check('a resize below the minimum is clamped', boot.lastResize(), [200, 260]);
 
   boot = bootPlugin({});
   await settled();
   boot.send({ type: 'resize', width: 999999, height: 999999 });
   check('a resize above the maximum is clamped', boot.lastResize(), [800, 720]);
+
+  // Width and height move independently, so an edge grip can widen the panel
+  // without dragging its height along.
+  boot = bootPlugin({ duckWindow: { width: 300, height: 400, minimized: false } });
+  await settled();
+  boot.send({ type: 'resize', width: 700, height: 400 });
+  check('a width-only drag leaves the height alone', boot.lastResize(), [700, 400]);
+  boot.send({ type: 'resize', width: 700, height: 650 });
+  check('a height-only drag leaves the width alone', boot.lastResize(), [700, 650]);
+
+  // The escape hatch for a panel dragged bigger than the Figma window, where
+  // every right-anchored control is off screen.
+  boot = bootPlugin({ duckWindow: { width: 760, height: 700, minimized: false } });
+  await settled();
+  boot.send({ type: 'reset-size' });
+  await settled();
+  check('reset-size returns the panel to the default', boot.lastResize(), [280, 380]);
+  check('and writes it through immediately', boot.state.duckWindow.width, 280);
+
+  // A panel minimized and then reset must come back open, not stay a duck.
+  boot = bootPlugin({ duckWindow: { width: 760, height: 700, minimized: true } });
+  await settled();
+  boot.send({ type: 'reset-size' });
+  await settled();
+  check('reset-size also un-minimizes', boot.window(), { type: 'window', width: 280, height: 380, minimized: false, textSize: 11 });
 
   // A message handler should not trust the sender's claimed state: a resize
   // arriving while minimized (a lost pointerup leaving a drag stuck active,

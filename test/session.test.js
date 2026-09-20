@@ -280,9 +280,59 @@ module.exports = async function run() {
   ws.last().incoming({ type: 'error', code: 'room_full', message: 'This room is full.' });
   check('room_full hangs up', b.state.ws, 'off');
   check('and shows the server\'s message', b.state.banner && b.state.banner.code, 'room_full');
+  // room_full answers the very first join, so this halt always lands before
+  // a snapshot, on the connecting screen, which has no footer to put the
+  // control in. It has to carry its own copy or the user is simply stuck.
+  check('and offers Reconnect on the pre-snapshot screen',
+    dom.el('root').innerHTML.indexOf('id="reconnect"') > -1, true);
   const hung = ws.instances().length;
   await new Promise((r) => setTimeout(r, 550));
   check('and does not reconnect', ws.instances().length, hung);
+
+  // The room hangs up the older socket when the same clientId joins again
+  // (two windows on one machine share a clientId). Reconnecting into that
+  // would kick the other window, which would kick this one back, forever.
+  b = boot();
+  deliver(identity());
+  ws.last().open();
+  ws.last().incoming(snapshot());
+  const beforeReplaced = ws.instances().length;
+  ws.last().close(1000, 'replaced');
+  check('a replaced socket hangs up instead of reconnecting', b.state.ws, 'off');
+  check('and says which window is at fault',
+    b.state.banner && b.state.banner.text.indexOf('another window') > -1, true);
+  check('and offers the user a way back', b.state.banner && b.state.banner.action, 'reconnect');
+  await new Promise((r) => setTimeout(r, 550));
+  check('no socket is opened behind the user', ws.instances().length, beforeReplaced);
+  b.session.reconnectSession();
+  check('the Reconnect control opens a socket', ws.instances().length, beforeReplaced + 1);
+  check('and clears the banner', b.state.banner, null);
+
+  // An ordinary drop still reconnects on its own: only the reason above is
+  // special-cased.
+  b = boot();
+  deliver(identity());
+  ws.last().open();
+  ws.last().incoming(snapshot());
+  ws.last().close(1006, '');
+  check('an abnormal close still reconnects', b.state.ws, 'reconnecting');
+
+  // A socket that opens and dies without ever delivering a snapshot is a
+  // failure however healthy the handshake looked, so the backoff has to keep
+  // growing across those attempts instead of resetting on every open.
+  b = boot();
+  deliver(identity());
+  ws.last().open();
+  ws.last().close(1006, '');
+  await new Promise((r) => setTimeout(r, 550));
+  check('a snapshotless open still schedules the next attempt', ws.instances().length, 2);
+  ws.last().open();
+  ws.last().close(1006, '');
+  const afterSecond = ws.instances().length;
+  await new Promise((r) => setTimeout(r, 550));
+  check('and the backoff has grown past the first step', ws.instances().length, afterSecond);
+  await new Promise((r) => setTimeout(r, 600));
+  check('so the third attempt lands on the longer wait', ws.instances().length, afterSecond + 1);
 
   b = boot();
   const RealWS = global.WebSocket;

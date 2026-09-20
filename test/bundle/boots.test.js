@@ -440,13 +440,13 @@ module.exports = async function run() {
         uiHandler({ type: 'expand' });
         await wait(20);
         const last = resizes[resizes.length - 1];
-        ok('expand restores a usable panel', last[0] >= 240 && last[1] >= 320, JSON.stringify(last));
+        ok('expand restores a usable panel', last[0] >= 200 && last[1] >= 260, JSON.stringify(last));
 
         uiHandler({ type: 'resize', width: 10, height: 10 });
         await wait(20);
         const clamped = resizes[resizes.length - 1];
         ok('an absurd resize is clamped, not applied',
-          clamped[0] >= 240 && clamped[1] >= 320, JSON.stringify(clamped));
+          clamped[0] >= 200 && clamped[1] >= 260, JSON.stringify(clamped));
       }
     }
   }

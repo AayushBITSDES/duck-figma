@@ -61,6 +61,11 @@ export type ServerMessage =
   | { type: 'error'; code: ServerErrorCode; message: string }
   | { type: 'pong' };
 
+// A room keeps one socket per clientId. When the same clientId joins again,
+// the older socket is closed with this reason so the client can tell a
+// takeover from an ordinary drop and stop reconnecting into a kick war.
+export const REPLACED_CLOSE_REASON = 'replaced';
+
 export const SESSION_LIMITS = {
   maxParticipants: 8,
   maxMessages: 100,

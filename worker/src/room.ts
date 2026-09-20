@@ -9,7 +9,7 @@ import type {
   ServerErrorCode,
   ServerMessage,
 } from '../../src/shared/protocol';
-import { SESSION_LIMITS } from '../../src/shared/protocol';
+import { REPLACED_CLOSE_REASON, SESSION_LIMITS } from '../../src/shared/protocol';
 import { GLOBAL_LIMITER_INSTANCE } from './limiter';
 import { completeFacilitator } from './openai';
 import { parseClientMessage, sanitizeDisplayName } from './parse';
@@ -221,7 +221,9 @@ export class Room extends DurableObject<Env> {
       const att = this.attachment(other);
       if (att.joined && att.clientId === msg.clientId) {
         try {
-          other.close(1000, 'replaced');
+          // The reason is load-bearing: the client reads it to tell a
+          // takeover from a drop, and reconnects on a drop only.
+          other.close(1000, REPLACED_CLOSE_REASON);
         } catch {
           // ignore
         }

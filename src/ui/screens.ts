@@ -2,7 +2,7 @@ import { ChatMessage, Participant, SESSION_LIMITS } from '../shared/protocol';
 import { post, applyTextSize } from './bridge';
 import { duckSvg } from './duck';
 import { escapeHtml, render, renderCollapsed, renderMarkdown } from './render';
-import { actContribute, actPass, actRetry, actSetState, onPaint } from './session';
+import { actContribute, actPass, actRetry, actSetState, onPaint, reconnectSession } from './session';
 import { iHaveActed, lastFacilitatorText, moodLabel, MOODS, Mode, state } from './state';
 
 // The plugin has no window into which screen is up. Every screen goes through
@@ -60,8 +60,14 @@ onPaint(paintSession);
 export function showConnecting() {
   setMode('connecting');
   const err = state.banner && state.banner.kind === 'error' ? state.banner.text : '';
-  const line =
-    state.ws === 'reconnecting'
+  // A halt before the first snapshot is the common case, not the rare one:
+  // room_full arrives in answer to the very first join. This screen has no
+  // footer, so without its own copy of the control the user would be told
+  // what went wrong and given no way to act on it.
+  const halted = !!(state.banner && state.banner.action === 'reconnect');
+  const line = halted
+    ? 'Not connected.'
+    : state.ws === 'reconnecting'
       ? 'Reconnecting to this board\'s session...'
       : 'Joining this board\'s session...';
   render(
@@ -70,10 +76,14 @@ export function showConnecting() {
     '<div class="idle-duck" aria-hidden="true">' + duckSvg(72) + '</div>' +
     '<div>' + escapeHtml(line) + '</div>' +
     (err ? '<div class="bubble err">' + escapeHtml(err) + '</div>' : '') +
+    (halted ? '<button type="button" id="reconnect" class="primary">Reconnect</button>' : '') +
     '</div>' +
     minimizeButton() +
     '</div>'
   );
+  if (state.minimized) return;
+  const reconnect = document.getElementById('reconnect');
+  if (reconnect) reconnect.onclick = () => reconnectSession();
 }
 
 export function openSettings() {
@@ -88,6 +98,8 @@ export function showSettings() {
     '<div><label for="text-size">Text size</label>' +
     '<select id="text-size">' + textSizeOptions() + '</select></div>' +
     '<p class="muted tiny">Text size is saved on this device.</p>' +
+    '<div><button type="button" id="reset-size">Reset panel size</button></div>' +
+    '<p class="muted tiny">Drag the right or bottom edge to resize. If the panel ends up bigger than your Figma window, reset it here.</p>' +
     '</div>' +
     '<footer class="ftr">' +
     '<button type="button" id="back" class="ghost">Back</button>' +
@@ -104,6 +116,8 @@ export function showSettings() {
     };
     size.focus();
   }
+  const resetSize = document.getElementById('reset-size');
+  if (resetSize) resetSize.onclick = () => post({ type: 'reset-size' });
   const back = document.getElementById('back');
   if (back) {
     back.onclick = () => {
@@ -300,6 +314,12 @@ function footerInner(kind: Composer): string {
   if (kind === 'waiting' || kind === 'thinking') {
     return summary + settings + infoHtml;
   }
+  // 'offline' covers both "the socket dropped and we are on it" and "we have
+  // stopped trying and only the user can decide what happens next".
+  if (state.banner && state.banner.action === 'reconnect') {
+    return '<button type="button" id="reconnect" class="primary">Reconnect</button>' +
+      summary + settings + infoHtml;
+  }
   return '<p class="muted tiny">Reconnecting...</p>' + summary + settings + infoHtml;
 }
 
@@ -370,6 +390,8 @@ function wireFooter(kind: Composer, focus?: boolean) {
   if (pass) pass.onclick = () => actPass();
   const retry = document.getElementById('retry');
   if (retry) retry.onclick = () => actRetry();
+  const reconnect = document.getElementById('reconnect');
+  if (reconnect) reconnect.onclick = () => reconnectSession();
   const summary = document.getElementById('summary');
   if (summary) {
     summary.onclick = () => {

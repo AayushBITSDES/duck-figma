@@ -1,7 +1,7 @@
 import { sendBoard } from './board';
 import { bootSession } from './session';
 import { updateSummary } from './summary';
-import { initWindow, handleResize, handleMinimize, handleExpand, handleTextSize } from './window';
+import { initWindow, handleResize, handleResetSize, handleMinimize, handleExpand, handleTextSize } from './window';
 
 figma.showUI(__html__, { width: 280, height: 380, themeColors: true });
 
@@ -28,6 +28,10 @@ figma.ui.onmessage = (msg) => {
 
   if (msg.type === 'resize') {
     handleResize(msg.width, msg.height);
+  }
+
+  if (msg.type === 'reset-size') {
+    handleResetSize();
   }
 
   if (msg.type === 'minimize') {

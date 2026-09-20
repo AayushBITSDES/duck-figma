@@ -36,14 +36,17 @@
  */
 
 const MINIMIZED_SIZE = 70; // figma.showUI's own hard floor for width; reused as the collapsed duck's fixed size.
-const MIN_OPEN_WIDTH = 240;
-const MIN_OPEN_HEIGHT = 320;
-// Both the resize grip (right:0; bottom:0) and the minimize button (top:6;
-// right:6) are anchored to the iframe's own right edge, so a panel wider or
-// taller than the screen can push both off screen with no way back short of
-// clearing clientStorage by hand. 1280x800 is about as small as a laptop
-// display gets in practice; capping comfortably under that keeps both
-// controls reachable everywhere, with room left over for Figma's own chrome.
+const MIN_OPEN_WIDTH = 200;
+const MIN_OPEN_HEIGHT = 260;
+// Every control that could undo an oversized panel sits on an edge that the
+// panel itself can push off screen: the grips at right and bottom, minimize
+// at top right, and Settings (which holds "Reset panel size") in the footer
+// at the bottom. A panel bigger than the Figma window clips all of them, and
+// the size is persisted, so reopening brings the same trap back. The cap has
+// to keep the panel inside the smallest host window anyone plausibly has.
+// 1280x800 is about as small as a laptop display gets; this stays well under
+// it with room for Figma's own chrome. handleResetSize below is the belt to
+// this pair of braces, not a licence to remove them.
 const MAX_OPEN_WIDTH = 800;
 const MAX_OPEN_HEIGHT = 720;
 const DEFAULT_WIDTH = 280;
@@ -173,6 +176,19 @@ export function handleResize(width: number, height: number) {
   figma.ui.resize(openWidth, openHeight);
   postWindow();
   schedulePersist();
+}
+
+// The way out of a panel dragged bigger than the Figma window, where the
+// right-anchored grips and the minimize button are all off screen. Triggered
+// from Settings, which lives at the top left and so is always reachable.
+export function handleResetSize() {
+  userActed = true;
+  minimized = false;
+  openWidth = DEFAULT_WIDTH;
+  openHeight = DEFAULT_HEIGHT;
+  figma.ui.resize(openWidth, openHeight);
+  postWindow();
+  persistNow();
 }
 
 export function handleMinimize() {

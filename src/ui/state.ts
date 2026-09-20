@@ -7,6 +7,10 @@ export type Banner = {
   kind: 'error' | 'info';
   text: string;
   code?: ServerErrorCode;
+  // Set when the only way forward is the user asking for another connection
+  // attempt, so the footer can offer one instead of claiming it is already
+  // reconnecting. Nothing auto-retries while this is set.
+  action?: 'reconnect';
 };
 
 // A single mutable object rather than exported `let` bindings: ES module live

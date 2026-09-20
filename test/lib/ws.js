@@ -25,10 +25,12 @@ class FakeWebSocket {
     this.sent.push(JSON.parse(data));
   }
 
-  close() {
+  // The real close event carries a code and a reason, and session.ts reads
+  // the reason to tell a takeover from a drop.
+  close(code, reason) {
     if (this.readyState === FakeWebSocket.CLOSED) return;
     this.readyState = FakeWebSocket.CLOSED;
-    if (this.onclose) this.onclose();
+    if (this.onclose) this.onclose({ code: code === undefined ? 1000 : code, reason: reason || '' });
   }
 
   open() {
