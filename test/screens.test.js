@@ -354,4 +354,65 @@ module.exports = async function run() {
     type: 'mode',
     mode: 'settings',
   });
+
+  // --- Someone holding the round up: nudge, and go on without them ---------
+  const holding = { round: { id: 2, status: 'collecting' }, participants: [
+    { clientId: 'client-1', displayName: 'Ada', status: 'contributed' },
+    { clientId: 'client-2', displayName: 'Grace Hopper', status: 'pending' },
+  ] };
+  const held = boot();
+  const heldSock = live(held, holding);
+  check('once you are in, the strip offers a nudge and a way on',
+    [html().indexOf('Waiting on Grace Hopper') > -1, html().indexOf('>Nudge Grace<') > -1, html().indexOf('>Go on without Grace<') > -1],
+    [true, true, true]);
+  el('nudge').onclick();
+  check('Nudge asks the room to nudge this round', heldSock.sent.filter((m) => m.type === 'nudge').pop(), { type: 'nudge', roundId: 2 });
+  check('and says it did, switched off for the cooldown', /id="nudge"[^>]*\sdisabled[^>]*>Nudged</.test(html()), true);
+  el('close-round').onclick();
+  check('Go on without asks the room to start the countdown',
+    heldSock.sent.filter((m) => m.type === 'close-round').pop(), { type: 'close-round', roundId: 2 });
+
+  heldSock.incoming({ type: 'round', round: { id: 2, status: 'collecting', closesAt: Date.now() + 20_000 } });
+  check('the countdown replaces the offer', [html().indexOf('Going on without Grace Hopper') > -1, html().indexOf('id="nudge"') > -1], [true, false]);
+  check('and its clock shows the seconds left', /^(19|20)s$/.test(el('round-clock').innerHTML), true);
+
+  const holdout = boot();
+  live(holdout, { round: { id: 2, status: 'collecting', closesAt: Date.now() + 20_000 }, participants: [
+    { clientId: 'client-1', displayName: 'Ada', status: 'pending' },
+    { clientId: 'client-2', displayName: 'Grace', status: 'contributed' },
+  ] });
+  check('the person being waited on is told the round is closing', html().indexOf('The round closes soon. Answer or pass.') > -1, true);
+
+  // --- Being nudged ---------------------------------------------------------
+  const poked = boot();
+  const pokedSock = live(poked, { round: { id: 2, status: 'collecting' } });
+  dom.posted.length = 0;
+  pokedSock.incoming({ type: 'nudged', by: 'Grace' });
+  check('a nudge says who is waiting, in the strip', /id="round"[\s\S]*Grace is waiting on you\./.test(html()), true);
+  check('and asks the plugin for a toast that reaches a collapsed panel',
+    dom.posted.filter((m) => m.type === 'notify').pop(), { type: 'notify', text: 'Grace is waiting on you in Duck Check-In.' });
+
+  // --- New session ----------------------------------------------------------
+  const fresh = boot();
+  const freshSock = live(fresh, {
+    round: { id: 3, status: 'collecting' },
+    messages: [{ id: 'old-1', at: 1, kind: 'contribution', author: { clientId: 'client-2', displayName: 'Grace' }, text: 'An old answer' }],
+  });
+  fresh.state.draft = 'half an old thought';
+  fresh.openSettings();
+  el('new-session').onclick();
+  check('one tap on New session only arms it',
+    [freshSock.sent.filter((m) => m.type === 'reset').length, html().indexOf('Tap again to clear it for everyone') > -1], [0, true]);
+  el('new-session').onclick();
+  check('the second tap asks the room for a new session', freshSock.sent.filter((m) => m.type === 'reset').length, 1);
+  check('and goes back to the chat', fresh.state.mode, 'session');
+  freshSock.incoming({
+    type: 'snapshot', roomId: 'file:abc', you: { clientId: 'client-1' },
+    participants: [{ clientId: 'client-1', displayName: 'Ada', status: 'pending' }],
+    messages: [{ id: 'sys-1', at: 2, kind: 'system', author: { clientId: 'client-2', displayName: 'Grace' }, text: 'Grace started a new session.' }],
+    round: { id: 1, status: 'collecting' },
+  });
+  check('the fresh snapshot clears the old chat off the screen',
+    [html().indexOf('An old answer') > -1, html().indexOf('Grace started a new session.') > -1], [false, true]);
+  check('and drops the draft that belonged to the old session', fresh.state.draft, '');
 };

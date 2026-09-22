@@ -97,11 +97,12 @@
      nothing to say it takes no space at all. */
   #round:empty { display: none; }
   .blocker {
-    display: flex; align-items: center; gap: 6px;
+    display: flex; flex-direction: column; gap: 7px;
     padding: 9px 12px 10px;
     background: var(--figma-color-bg-secondary);
     border-bottom: 1px solid var(--figma-color-border);
   }
+  .blocker-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
   .blocker-text {
     flex: 1 1 auto; min-width: 0; font-weight: 500;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -153,6 +154,10 @@
   }
   button.primary:hover { background: var(--accent-hover); }
   button.primary:active { background: var(--accent-pressed); }
+  /* The strip's controls: the frame's 10px medium, on the same shapes. */
+  button.small { font-size: calc(var(--duck-font, 11px) - 1px); padding: 5px 10px; }
+  /* The second tap of a control that clears something for everyone. */
+  button.danger { color: var(--figma-color-text-danger); border-color: var(--figma-color-border-danger-strong); }
   /* Links are for the actions that are not the turn: pass, summary, back. */
   button.link {
     border: none; background: none; padding: 4px 0; font-weight: 400;
@@ -381,11 +386,38 @@
   </div>
 </template>
 
-<!-- The strip under the header while something holds the round up. -->
+<!-- The strip under the header while something holds the round up.
+     {{{actions}}} is t-blocker-actions, or empty. -->
 <template id="t-blocker">
   <div class="blocker">
-    <span class="blocker-text">{{text}}</span>
-    <span class="blocker-meta">{{meta}}</span>
+    <div class="blocker-row">
+      <span class="blocker-text">{{text}}</span>
+      <span class="blocker-meta">{{meta}}</span>
+    </div>
+    {{{actions}}}
+  </div>
+</template>
+
+<!-- Offered to anyone who has answered while someone else has not.
+     Go on without starts the countdown in t-countdown. {{nudged}} switches
+     Nudge off for as long as the Worker would refuse another. -->
+<template id="t-blocker-actions">
+  <div class="bar">
+    <button type="button" id="nudge" class="primary small" {{nudged}}>{{nudge}}</button>
+    <button type="button" id="close-round" class="small">{{close}}</button>
+  </div>
+</template>
+
+<!-- The countdown after someone chose to go on without the holdouts. The code
+     writes the seconds into #round-clock in place, so keep that id; it is
+     hidden from screen readers, which hear the text once instead of a number
+     every second. -->
+<template id="t-countdown">
+  <div class="blocker">
+    <div class="blocker-row">
+      <span class="blocker-text">{{text}}</span>
+      <span id="round-clock" class="blocker-meta" aria-hidden="true"></span>
+    </div>
   </div>
 </template>
 
@@ -550,8 +582,23 @@
         <div class="bar"><button type="button" id="reset-size">Reset panel size</button></div>
         <p class="muted tiny">Drag the right or bottom edge to resize. If the panel ends up bigger than your Figma window, reset it here.</p>
       </div>
+      <div class="field">
+        <span class="caps muted">Session</span>
+        <div class="bar">{{{session}}}</div>
+        <p class="muted tiny">Clears the chat and starts round 1 for everyone in this file.</p>
+      </div>
     </div>
   </div>
+</template>
+
+<!-- New session takes two taps, since it clears the chat for everyone. The
+     first swaps in the armed version for a few seconds. -->
+<template id="t-btn-new-session">
+  <button type="button" id="new-session" {{disabled}}>New session</button>
+</template>
+
+<template id="t-btn-new-session-armed">
+  <button type="button" id="new-session" class="danger" {{disabled}}>Tap again to clear it for everyone</button>
 </template>
 
 <template id="t-size-option">

@@ -37,6 +37,13 @@ export const state = {
   actedRoundId: null as number | null,
   busy: false,
   banner: null as Banner | null,
+  // When this user last nudged, so the button can say so for the same
+  // cooldown the Worker enforces.
+  nudgedAt: 0,
+  // Who last nudged this user, and in which round: the strip says so for as
+  // long as that round is still waiting on them.
+  nudgedBy: '',
+  nudgedRound: 0,
 
   boardItems: [] as string[],
 

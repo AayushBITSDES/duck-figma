@@ -2,7 +2,7 @@ import { ChatMessage, Participant, SESSION_LIMITS } from '../shared/protocol';
 import { post, applyTextSize } from './bridge';
 import { duckHeadSvg } from './duck';
 import { escapeHtml, render, renderCollapsed, renderMarkdown, tpl } from './render';
-import { actContribute, actPass, actRetry, actSetState, onPaint, reconnectSession } from './session';
+import { actCloseRound, actContribute, actNudge, actPass, actReset, actRetry, actSetState, onPaint, reconnectSession } from './session';
 import { iHaveActed, lastFacilitatorText, moodLabel, MOODS, Mode, state } from './state';
 
 // The plugin has no window into which screen is up. Every screen goes through
@@ -71,7 +71,10 @@ export function paintSession() {
   // it was drawn with when the panel closed. It now carries a signal that
   // changes with the round, which makes it the one screen that has to repaint
   // while minimized.
-  if (state.minimized) return showCollapsed();
+  if (state.minimized) {
+    syncClock();
+    return showCollapsed();
+  }
   if (state.gotSnapshot) showSession({ focus: state.mode === 'connecting' });
   else showConnecting();
 }
@@ -113,6 +116,11 @@ export function showConnecting() {
   if (settings) settings.onclick = openSettings;
 }
 
+// A new session clears the chat for everyone, so it takes a second tap within
+// this long. A confirm() dialog is not an option: Figma blocks them in plugins.
+const RESET_CONFIRM_MS = 4000;
+let resetArmedUntil = 0;
+
 export function openSettings() {
   showSettings();
 }
@@ -121,9 +129,13 @@ export function showSettings() {
   setMode('settings');
   // Back lives in the header, the way Figma's own sub-panels do it, so the
   // screen needs no footer at all.
+  const armed = Date.now() < resetArmedUntil;
   render(tpl('t-settings', {
     header: tpl('t-settings-header', { min: minimizeButton() }),
     sizes: textSizeOptions(),
+    session: tpl(armed ? 't-btn-new-session-armed' : 't-btn-new-session', {
+      disabled: state.ws === 'live' && state.gotSnapshot ? '' : 'disabled',
+    }),
   }));
   if (state.minimized) return;
   const size = document.getElementById('text-size') as HTMLSelectElement | null;
@@ -134,7 +146,27 @@ export function showSettings() {
       post({ type: 'text-size', size: px });
       showSettings();
     };
-    size.focus();
+    if (!armed) size.focus();
+  }
+  const fresh = document.getElementById('new-session');
+  if (fresh) {
+    fresh.onclick = () => {
+      if (Date.now() < resetArmedUntil) {
+        resetArmedUntil = 0;
+        if (actReset()) showSession({ focus: true });
+        return;
+      }
+      resetArmedUntil = Date.now() + RESET_CONFIRM_MS;
+      showSettings();
+      // Quietly disarm if the second tap never comes.
+      setTimeout(() => {
+        if (state.mode === 'settings' && resetArmedUntil && Date.now() >= resetArmedUntil) {
+          resetArmedUntil = 0;
+          showSettings();
+        }
+      }, RESET_CONFIRM_MS + 50);
+    };
+    if (armed) fresh.focus();
   }
   const resetSize = document.getElementById('reset-size');
   if (resetSize) resetSize.onclick = () => post({ type: 'reset-size' });
@@ -200,23 +232,76 @@ function blocker(text: string, meta?: string): string {
   return tpl('t-blocker', { text: text, meta: meta || '' });
 }
 
+function firstName(p: Participant): string {
+  return p.displayName.split(' ')[0] || p.displayName;
+}
+
 // Only speaks when something is holding the round up. "Your turn" and
 // "thinking" are already in the header, and saying them again here is what
 // made the old round line read as filler.
 function roundInner(): string {
   if (state.ws === 'reconnecting') return blocker('Reconnecting. Your messages stay until a fresh snapshot arrives.');
   if (state.round.status === 'failed') return blocker('The duck could not reply. Anyone can retry.');
-  if (state.round.status === 'thinking' || !iHaveActed()) return '';
+  if (state.round.status !== 'collecting') return '';
   const pending = pendingOthers();
+  const names = pending.map((p) => p.displayName).join(', ');
+  if (state.round.closesAt) {
+    return tpl('t-countdown', {
+      text: iHaveActed() ? 'Going on without ' + names : 'The round closes soon. Answer or pass.',
+    });
+  }
+  // The one state where the strip is otherwise empty for this user, which is
+  // also where a nudge has to be impossible to miss.
+  if (!iHaveActed()) {
+    return state.nudgedBy && state.nudgedRound === state.round.id ? blocker(state.nudgedBy + ' is waiting on you.') : '';
+  }
   if (!pending.length) return '';
   let done = 0;
   for (let i = 0; i < state.participants.length; i++) {
     if (state.participants[i].status !== 'pending') done++;
   }
-  return blocker(
-    'Waiting on ' + pending.map((p) => p.displayName).join(', '),
-    done + ' of ' + state.participants.length + ' in'
-  );
+  const one = pending.length === 1;
+  const nudged = Date.now() - state.nudgedAt < SESSION_LIMITS.nudgeCooldownMs;
+  return tpl('t-blocker', {
+    text: 'Waiting on ' + names,
+    meta: done + ' of ' + state.participants.length + ' in',
+    actions: tpl('t-blocker-actions', {
+      nudge: nudged ? 'Nudged' : one ? 'Nudge ' + firstName(pending[0]) : 'Nudge ' + pending.length,
+      nudged: nudged ? 'disabled' : '',
+      close: one ? 'Go on without ' + firstName(pending[0]) : 'Go on without them',
+    }),
+  });
+}
+
+let clock: ReturnType<typeof setInterval> | null = null;
+
+// The countdown's seconds are written into #round-clock in place, never by
+// repainting #round, so the strip's live region is announced once and not
+// every second.
+function tickClock() {
+  const closesAt = state.round.closesAt;
+  if (!closesAt || state.round.status !== 'collecting') return syncClock();
+  const face = document.getElementById('round-clock');
+  if (face) face.innerHTML = Math.max(0, Math.ceil((closesAt - Date.now()) / 1000)) + 's';
+}
+
+function syncClock() {
+  const running = !!state.round.closesAt && state.round.status === 'collecting' && !state.minimized;
+  if (running && !clock) clock = setInterval(tickClock, 250);
+  if (!running && clock) {
+    clearInterval(clock);
+    clock = null;
+  }
+  if (running) tickClock();
+}
+
+// #round is rebuilt whenever what it says changes, so its buttons are wired
+// again each time, not once with the footer.
+function wireRound() {
+  const nudge = document.getElementById('nudge');
+  if (nudge) nudge.onclick = () => actNudge();
+  const close = document.getElementById('close-round');
+  if (close) close.onclick = () => actCloseRound();
 }
 
 function isMine(m: ChatMessage): boolean {
@@ -421,6 +506,7 @@ let paintedThinking = false;
 let paintedBanner = '';
 let paintedBusy = false;
 let paintedSummary = false;
+let shownRoundId = 0;
 // What the two live regions last said. They are rewritten only when that
 // changes: a screen reader can re-announce a region whenever its nodes are
 // replaced, and patchSession runs on every presence tick.
@@ -514,6 +600,19 @@ function appendNewTurns(thread: HTMLElement) {
   if (added) thread.innerHTML += added;
 }
 
+// The thread is only ever appended to. A new session takes every turn away,
+// and appending cannot, so without this the old chat would stay on screen
+// under a header saying round 1. Turns trimmed off the front at the message
+// cap land here too, which is also right.
+function threadShrank(): boolean {
+  const live: Record<string, true> = {};
+  for (let i = 0; i < state.messages.length; i++) live[state.messages[i].id] = true;
+  for (let i = 0; i < paintedMessageIds.length; i++) {
+    if (!live[paintedMessageIds[i]]) return true;
+  }
+  return false;
+}
+
 function patchSession(kind: Composer, focus?: boolean): boolean {
   const presence = document.getElementById('presence');
   const sub = document.getElementById('hdr-sub');
@@ -536,7 +635,9 @@ function patchSession(kind: Composer, focus?: boolean): boolean {
   if (strip !== paintedRound) {
     round.innerHTML = strip;
     paintedRound = strip;
+    wireRound();
   }
+  syncClock();
   appendNewTurns(thread);
   syncThreadExtras(thread);
 
@@ -577,15 +678,23 @@ function paintSessionScreen(kind: Composer, focus?: boolean) {
   if (state.minimized) return;
   const thread = document.getElementById('thread');
   if (thread) thread.scrollTop = thread.scrollHeight;
+  wireRound();
+  syncClock();
   wireFooter(kind, !!focus);
 }
 
 export function showSession(opts?: { focus?: boolean }) {
-  captureComposer();
+  // A round number going backwards is a new session, or a room wiped while
+  // everyone was away, and a half-typed answer belonged to the old one. It is
+  // dropped here rather than when the snapshot lands, because captureComposer
+  // would read it straight back out of the textarea still on screen.
+  if (state.round.id < shownRoundId) state.draft = '';
+  else captureComposer();
+  shownRoundId = state.round.id;
   const prevFocus = captureFocus();
   const kind = composerKind();
   const focus = !!(opts && opts.focus);
-  const canPatch = state.mode === 'session' && !state.minimized && sessionDomReady();
+  const canPatch = state.mode === 'session' && !state.minimized && sessionDomReady() && !threadShrank();
 
   setMode('session');
   // render() swallows paints while collapsed. Do not bookkeep that as a

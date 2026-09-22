@@ -103,6 +103,13 @@ export function parseClientMessage(raw: string): ParseResult {
       if (!isRoundId(msg.roundId)) return { ok: false, message: 'Invalid roundId' };
       return { ok: true, value: { type: 'retry', roundId: msg.roundId } };
     }
+    case 'nudge':
+    case 'close-round': {
+      if (!isRoundId(msg.roundId)) return { ok: false, message: 'Invalid roundId' };
+      return { ok: true, value: { type: msg.type, roundId: msg.roundId } };
+    }
+    case 'reset':
+      return { ok: true, value: { type: 'reset' } };
     case 'ping':
       return { ok: true, value: { type: 'ping' } };
     default:

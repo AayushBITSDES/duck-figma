@@ -1,5 +1,5 @@
 import { env, exports } from 'cloudflare:workers';
-import { runDurableObjectAlarm } from 'cloudflare:test';
+import { runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ChatMessage, ServerMessage } from '../../src/shared/protocol';
 import { REPLACED_CLOSE_REASON, SESSION_LIMITS } from '../../src/shared/protocol';
@@ -528,5 +528,116 @@ describe('global OpenAI limiter', () => {
     expect(
       first.log.filter((m) => m.type === 'round' && m.round.id === 1 && m.round.status === 'thinking')
     ).toHaveLength(0);
+  });
+});
+
+describe('new session', () => {
+  it('clears the chat and the round for everyone, and keeps them connected', async () => {
+    const id = roomId('reset');
+    const alex = await join(id, 'Alex', 'alex');
+    const sam = await join(id, 'Sam', 'sam');
+    await alex.until('presence');
+    alex.send({ type: 'contribute', roundId: 1, text: 'Old news.' });
+    sam.send({ type: 'pass', roundId: 1 });
+    await alex.untilMessageKind('facilitator');
+    alex.send({ type: 'reset' });
+    for (const client of [alex, sam]) {
+      const snap = await client.until('snapshot');
+      if (snap.type !== 'snapshot') throw new Error('expected snapshot');
+      expect(snap.round).toEqual({ id: 1, status: 'collecting' });
+      expect(snap.messages.map((m) => [m.kind, m.text])).toEqual([['system', 'Alex started a new session.']]);
+      expect(snap.participants.map((p) => [p.displayName, p.status]).sort()).toEqual([['Alex', 'pending'], ['Sam', 'pending']]);
+    }
+    expect(sam.log.find((m) => m.type === 'snapshot' && m.you.clientId !== undefined)).toBeTruthy();
+    sam.send({ type: 'pass', roundId: 1 });
+    const passed = await alex.untilMessageKind('pass');
+    expect(passed.author.displayName).toBe('Sam');
+  });
+
+  it('keeps the facilitator spend window, so a reset cannot clear the limit', async () => {
+    const id = roomId('reset-cap');
+    const alex = await join(id, 'Alex', 'alex');
+    for (let roundId = 1; roundId <= SESSION_LIMITS.maxOpenAiCallsPerWindow; roundId++) {
+      alex.send({ type: 'pass', roundId });
+      await alex.untilMessageKind('facilitator');
+    }
+    alex.send({ type: 'reset' });
+    await alex.until('snapshot');
+    alex.send({ type: 'pass', roundId: 1 });
+    const err = await alex.until('error');
+    expect(err.type === 'error' && err.code).toBe('session_cap');
+  });
+});
+
+describe('nudge', () => {
+  it('reaches only the people still to act, once per cooldown, and only from someone who has acted', async () => {
+    const id = roomId('nudge');
+    const alex = await join(id, 'Alex', 'alex');
+    const sam = await join(id, 'Sam', 'sam');
+    const kai = await join(id, 'Kai', 'kai');
+    await alex.until('presence');
+    alex.send({ type: 'nudge', roundId: 1 });
+    const early = await alex.until('error');
+    expect(early.type === 'error' && early.code).toBe('round_locked');
+
+    alex.send({ type: 'contribute', roundId: 1, text: 'Here.' });
+    sam.send({ type: 'contribute', roundId: 1, text: 'Also here.' });
+    await alex.untilMessageKind('contribution');
+    await alex.untilMessageKind('contribution');
+    alex.send({ type: 'nudge', roundId: 1 });
+    const nudge = await kai.until('nudged');
+    expect(nudge).toEqual({ type: 'nudged', by: 'Alex' });
+
+    sam.send({ type: 'nudge', roundId: 1 });
+    sam.send({ type: 'ping' });
+    await sam.until('pong');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(kai.log.filter((m) => m.type === 'nudged')).toHaveLength(1);
+    expect(sam.log.filter((m) => m.type === 'nudged')).toHaveLength(0);
+    expect(alex.log.filter((m) => m.type === 'nudged')).toHaveLength(0);
+  });
+});
+
+describe('close round', () => {
+  it('counts down for everyone, then closes without the holdout and facilitates', async () => {
+    const id = roomId('close');
+    const alex = await join(id, 'Alex', 'alex');
+    const sam = await join(id, 'Sam', 'sam');
+    await alex.until('presence');
+    alex.send({ type: 'contribute', roundId: 1, text: 'Ready when you are.' });
+    await alex.untilMessageKind('contribution');
+
+    sam.send({ type: 'close-round', roundId: 1 });
+    const refused = await sam.until('error');
+    expect(refused.type === 'error' && refused.code).toBe('round_locked');
+
+    const before = Date.now();
+    alex.send({ type: 'close-round', roundId: 1 });
+    for (const client of [alex, sam]) {
+      const frame = await client.until('round');
+      if (frame.type !== 'round') throw new Error('expected round');
+      expect(frame.round.status).toBe('collecting');
+      expect(frame.round.closesAt! - before).toBeGreaterThan(SESSION_LIMITS.closeRoundDelayMs - 5_000);
+      expect(frame.round.closesAt! - before).toBeLessThanOrEqual(SESSION_LIMITS.closeRoundDelayMs + 1_000);
+    }
+
+    // An alarm that fires before the deadline closes nothing.
+    const stub = env.ROOM.getByName(id);
+    await runDurableObjectAlarm(stub);
+    expect(alex.log.some((m) => m.type === 'message' && m.message.kind === 'system')).toBe(false);
+
+    await runInDurableObject(stub, (instance) => {
+      const room = instance as unknown as { record: { round: { closesAt?: number } } };
+      room.record.round.closesAt = Date.now() - 1;
+    });
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    const closed = await alex.untilMessageKind('system');
+    expect(closed.text).toBe('Round closed without Sam.');
+    const duck = await sam.untilMessageKind('facilitator');
+    expect(duck.kind).toBe('facilitator');
+    const next = await alex.until('round');
+    let frame = next;
+    while (frame.type === 'round' && frame.round.id === 1) frame = await alex.until('round');
+    expect(frame.type === 'round' && frame.round).toEqual({ id: 2, status: 'collecting' });
   });
 });

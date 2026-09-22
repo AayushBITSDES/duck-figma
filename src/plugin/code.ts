@@ -45,4 +45,8 @@ figma.ui.onmessage = (msg) => {
   if (msg.type === 'text-size') {
     handleTextSize(msg.size);
   }
+
+  if (msg.type === 'notify') {
+    figma.notify(String(msg.text || '').slice(0, 140));
+  }
 };

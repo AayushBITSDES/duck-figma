@@ -7,7 +7,7 @@ import {
   ServerErrorCode,
   ServerMessage,
 } from '../shared/protocol';
-import { requestBoard } from './bridge';
+import { post, requestBoard } from './bridge';
 import { stripDashes } from './render';
 import { iHaveActed, state } from './state';
 
@@ -237,6 +237,12 @@ function applyFrame(raw: unknown) {
     } else if (state.banner && state.banner.code === 'facilitator_failed') {
       state.banner = null;
     }
+  } else if (parsed.type === 'nudged') {
+    state.nudgedBy = parsed.by;
+    state.nudgedRound = state.round.id;
+    // A toast from the plugin reaches someone heads-down in the board, or
+    // with the panel collapsed, where nothing in the panel would.
+    post({ type: 'notify', text: parsed.by + ' is waiting on you in Duck Check-In.' });
   } else if (parsed.type === 'error') {
     if (parsed.code === 'already_acted') {
       state.actedRoundId = state.round.id;
@@ -400,6 +406,33 @@ export async function actPass(): Promise<boolean> {
     roundId: state.round.id,
     board: clippedBoard(),
   }));
+}
+
+export function actNudge() {
+  if (state.round.status !== 'collecting' || !iHaveActed()) return;
+  if (send({ type: 'nudge', roundId: state.round.id })) {
+    state.nudgedAt = Date.now();
+    // Brings the button back once the Worker would let another nudge through.
+    setTimeout(paint, SESSION_LIMITS.nudgeCooldownMs + 50);
+  } else {
+    markSendFailed();
+  }
+  paint();
+}
+
+export function actCloseRound() {
+  if (state.round.status !== 'collecting' || !iHaveActed() || state.round.closesAt) return;
+  if (!send({ type: 'close-round', roundId: state.round.id })) markSendFailed();
+  paint();
+}
+
+// The fresh snapshot the Worker sends everyone is what repaints; this only
+// reports whether the request left.
+export function actReset(): boolean {
+  if (send({ type: 'reset' })) return true;
+  markSendFailed();
+  paint();
+  return false;
 }
 
 export function actRetry() {

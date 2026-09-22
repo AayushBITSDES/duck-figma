@@ -12,6 +12,9 @@ export interface Participant {
 export interface RoundState {
   id: number;
   status: RoundStatus;
+  // Set while someone's close-round countdown runs: the Worker's clock, in
+  // epoch ms, at which it closes the round without whoever has not acted.
+  closesAt?: number;
 }
 
 export type ChatMessageKind = 'state' | 'contribution' | 'pass' | 'facilitator' | 'system';
@@ -34,6 +37,12 @@ export type ClientMessage =
   | { type: 'contribute'; roundId: number; text: string; board?: string[] }
   | { type: 'pass'; roundId: number; board?: string[] }
   | { type: 'retry'; roundId: number }
+  // Everyone still pending this round hears that the sender is waiting.
+  | { type: 'nudge'; roundId: number }
+  // Starts the countdown after which the round closes without the holdouts.
+  | { type: 'close-round'; roundId: number }
+  // Clears the chat and starts round 1 for everyone in the room.
+  | { type: 'reset' }
   | { type: 'ping' };
 
 export type ServerErrorCode =
@@ -59,6 +68,8 @@ export type ServerMessage =
   | { type: 'message'; message: ChatMessage }
   | { type: 'round'; round: RoundState }
   | { type: 'error'; code: ServerErrorCode; message: string }
+  // Sent only to the participants a nudge reached.
+  | { type: 'nudged'; by: string }
   | { type: 'pong' };
 
 // A room keeps one socket per clientId. When the same clientId joins again,
@@ -81,6 +92,10 @@ export const SESSION_LIMITS = {
   maxOpenAiCallsPerWindow: 10,
   openAiCallWindowMs: 10 * 60 * 1000,
   maxUnjoinedSockets: 8,
+  // How long a started close-round countdown runs before the round closes.
+  closeRoundDelayMs: 30_000,
+  // How often one person can be nudged, whoever is doing the nudging.
+  nudgeCooldownMs: 30_000,
   // Worker-global OpenAI attempt budget. Opaque room IDs are the room
   // capability, so inventing rooms must not bypass this demo cap.
   maxOpenAiCallsGlobalPerWindow: 100,

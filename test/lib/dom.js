@@ -45,6 +45,26 @@ function collectIds(html) {
   return out;
 }
 
+// The close tag that ends the element opened just before `from`, counting
+// nested elements of the same name. Taking the first close tag instead, as
+// this used to, cut an element holding its own <div>s short and left the
+// rest of its old content behind.
+function matchingClose(html, tag, from) {
+  const re = new RegExp('<(/?)' + tag + '\\b[^>]*>', 'g');
+  re.lastIndex = from;
+  let depth = 1;
+  let m;
+  while ((m = re.exec(html))) {
+    if (m[1]) {
+      depth -= 1;
+      if (depth === 0) return m.index;
+    } else if (!/\/>$/.test(m[0])) {
+      depth += 1;
+    }
+  }
+  return -1;
+}
+
 function replaceIdInner(html, id, inner) {
   const needle = 'id="' + id + '"';
   const at = html.indexOf(needle);
@@ -52,10 +72,10 @@ function replaceIdInner(html, id, inner) {
   const open = html.lastIndexOf('<', at);
   const tagMatch = /^<([a-zA-Z0-9]+)/.exec(html.slice(open));
   if (!tagMatch || open < 0) return html;
-  const close = html.indexOf('</' + tagMatch[1] + '>', at);
-  if (close < 0) return html;
   const gt = html.indexOf('>', at);
-  if (gt < 0 || gt > close) return html;
+  if (gt < 0) return html;
+  const close = matchingClose(html, tagMatch[1], gt + 1);
+  if (close < 0) return html;
   return html.slice(0, gt + 1) + inner + html.slice(close);
 }
 
