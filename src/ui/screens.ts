@@ -1,7 +1,7 @@
 import { ChatMessage, Participant, SESSION_LIMITS } from '../shared/protocol';
 import { post, applyTextSize } from './bridge';
 import { duckHeadSvg } from './duck';
-import { escapeHtml, render, renderCollapsed, renderMarkdown } from './render';
+import { escapeHtml, render, renderCollapsed, renderMarkdown, tpl } from './render';
 import { actContribute, actPass, actRetry, actSetState, onPaint, reconnectSession } from './session';
 import { iHaveActed, lastFacilitatorText, moodLabel, MOODS, Mode, state } from './state';
 
@@ -13,45 +13,34 @@ function setMode(mode: Mode) {
   post({ type: 'mode', mode: mode });
 }
 
-type HeaderOpts = {
-  lead: string;
-  sub?: string;
-  // Only the session screen's title and subtitle are patched in place, so
-  // only they may carry the ids patchSession looks for.
-  live?: boolean;
-  back?: boolean;
-  rail: string;
-};
+function roundLabel(): string {
+  return 'Round ' + state.round.id;
+}
 
 // The round number recedes, what the round wants from you does not. The
 // plugin's own name is not news to someone already looking at the panel, and
 // at 280px it was spending the width that the demand now uses.
-function header(opts: HeaderOpts) {
-  const sub = opts.sub || '';
-  return (
-    '<header class="hdr"><div class="hdr-row">' +
-    (opts.back ? '<button type="button" id="back" class="icon" title="Back" aria-label="Back">&lsaquo;</button>' : '') +
-    '<span' + (opts.live ? ' id="hdr-title"' : '') + ' class="hdr-title caps">' + escapeHtml(opts.lead) + '</span>' +
-    (sub || opts.live ? '<span class="hdr-dot" aria-hidden="true">&middot;</span>' : '') +
-    '<span' + (opts.live ? ' id="hdr-sub"' : '') + ' class="hdr-sub caps">' + escapeHtml(sub) + '</span>' +
-    '<span class="fill"></span>' +
-    minimizeButton() +
-    (opts.back ? '' : '<button type="button" id="settings" class="icon" title="Settings" aria-label="Settings">&middot;&middot;&middot;</button>') +
-    '</div>' + opts.rail + '</header>'
-  );
+function sessionHeader(): string {
+  return tpl('t-session-header', {
+    lead: roundLabel(),
+    sub: subtitle(),
+    min: minimizeButton(),
+    menu: tpl('t-btn-menu'),
+    rail: presenceHtml(),
+  });
 }
 
 function textSizeOptions() {
   let out = '';
   for (let px = 9; px <= 18; px++) {
-    out += '<option value="' + px + '"' + (px === state.textSize ? ' selected' : '') + '>' + px + 'px</option>';
+    out += tpl('t-size-option', { px: px, selected: px === state.textSize ? 'selected' : '' });
   }
   return out;
 }
 
 // Wired by delegation in ui.ts, so it works from whichever header draws it.
 function minimizeButton() {
-  return '<button type="button" id="min" class="icon" title="Collapse to the duck" aria-label="Collapse to the duck">&ndash;</button>';
+  return tpl('t-btn-min');
 }
 
 // The round is waiting on this user specifically: everyone else can be
@@ -63,13 +52,11 @@ function needsYou(): boolean {
 
 export function showCollapsed() {
   const turn = needsYou();
-  const label = turn ? 'Your turn. Open the duck' : 'Open the duck';
-  renderCollapsed(
-    '<button type="button" class="collapsed' + (turn ? ' turn' : '') +
-    '" id="collapsed" title="' + escapeHtml(label) + '" aria-label="' + escapeHtml(label) + '">' +
-    duckHeadSvg(44) +
-    '</button>'
-  );
+  renderCollapsed(tpl('t-collapsed', {
+    turn: turn ? 'turn' : '',
+    label: turn ? 'Your turn. Open the duck' : 'Open the duck',
+    duck: duckHeadSvg(44),
+  }));
 }
 
 export function repaint() {
@@ -107,20 +94,18 @@ export function showConnecting() {
   const lead = halted ? 'Not connected' : state.ws === 'reconnecting' ? 'Reconnecting' : 'Joining';
   // Halted means nothing is happening, so the rail stops running: a moving
   // bar over "Not connected" would be the panel contradicting itself.
-  const rail = halted
-    ? '<div class="rail"><span class="seg"></span></div>'
-    : '<div class="rail loading" aria-hidden="true"></div>';
-  render(
-    '<div class="screen">' +
-    header({ lead: lead, rail: rail }) +
-    '<div class="idle" role="status" aria-live="polite">' +
-    '<div class="idle-line">' + escapeHtml(line) + '</div>' +
-    (halted ? '' : '<div class="muted tiny">Everyone with this FigJam file open joins the same round.</div>') +
-    (err ? '<div class="bubble err">' + escapeHtml(err) + '</div>' : '') +
-    (halted ? '<button type="button" id="reconnect" class="primary">Reconnect</button>' : '') +
-    '</div>' +
-    '</div>'
-  );
+  render(tpl('t-connecting', {
+    header: tpl('t-connecting-header', {
+      lead: lead,
+      min: minimizeButton(),
+      menu: tpl('t-btn-menu'),
+      rail: tpl(halted ? 't-rail-stopped' : 't-rail-loading'),
+    }),
+    line: line,
+    detail: halted ? '' : tpl('t-connecting-detail'),
+    error: err ? tpl('t-error', { text: err }) : '',
+    action: halted ? tpl('t-btn-reconnect') : '',
+  }));
   if (state.minimized) return;
   const reconnect = document.getElementById('reconnect');
   if (reconnect) reconnect.onclick = () => reconnectSession();
@@ -136,22 +121,10 @@ export function showSettings() {
   setMode('settings');
   // Back lives in the header, the way Figma's own sub-panels do it, so the
   // screen needs no footer at all.
-  render(
-    '<div class="screen">' +
-    header({ lead: 'Settings', back: true, rail: '' }) +
-    '<div class="body">' +
-    '<div class="field">' +
-    '<label class="caps muted" for="text-size">Text size</label>' +
-    '<select id="text-size">' + textSizeOptions() + '</select>' +
-    '<p class="muted tiny">Saved on this device.</p>' +
-    '</div>' +
-    '<div class="field">' +
-    '<span class="caps muted">Panel</span>' +
-    '<div class="bar"><button type="button" id="reset-size">Reset panel size</button></div>' +
-    '<p class="muted tiny">Drag the right or bottom edge to resize. If the panel ends up bigger than your Figma window, reset it here.</p>' +
-    '</div>' +
-    '</div></div>'
-  );
+  render(tpl('t-settings', {
+    header: tpl('t-settings-header', { min: minimizeButton() }),
+    sizes: textSizeOptions(),
+  }));
   if (state.minimized) return;
   const size = document.getElementById('text-size') as HTMLSelectElement | null;
   if (size) {
@@ -204,9 +177,7 @@ function pendingOthers(): Participant[] {
 // label, not in an outline: alone in a session, an outlined segment drew one
 // empty bordered bar that read as broken.
 function presenceInner(): string {
-  if (!state.participants.length) {
-    return '<span class="muted tiny">No one else is here yet.</span>';
-  }
+  if (!state.participants.length) return tpl('t-rail-nobody');
   let segs = '';
   for (let i = 0; i < state.participants.length; i++) {
     const p = state.participants[i];
@@ -214,23 +185,19 @@ function presenceInner(): string {
     const status =
       p.status === 'contributed' ? 'contributed' :
       p.status === 'passed' ? 'passed' : 'still to answer';
-    const tone = p.status === 'contributed' ? ' in' : p.status === 'passed' ? ' passed' : '';
+    const tone = p.status === 'contributed' ? 'in' : p.status === 'passed' ? 'passed' : '';
     const label = p.displayName + (mine ? ' (you)' : '') + ', ' + status;
-    segs +=
-      '<span class="seg' + tone + '" role="listitem"' +
-      ' aria-label="' + escapeHtml(label) + '"></span>';
+    segs += tpl('t-seg', { tone: tone, label: label });
   }
   return segs;
 }
 
 function presenceHtml(): string {
-  return '<div id="presence" class="rail" role="list" aria-label="Round progress">' +
-    presenceInner() + '</div>';
+  return tpl('t-rail', { segments: presenceInner() });
 }
 
 function blocker(text: string, meta?: string): string {
-  return '<div class="blocker"><span class="blocker-text">' + escapeHtml(text) + '</span>' +
-    (meta ? '<span class="blocker-meta">' + escapeHtml(meta) + '</span>' : '') + '</div>';
+  return tpl('t-blocker', { text: text, meta: meta || '' });
 }
 
 // Only speaks when something is holding the round up. "Your turn" and
@@ -261,39 +228,19 @@ function turnHtml(m: ChatMessage): string {
   const name = (m.author && m.author.displayName) || 'Someone';
   const kind = m.kind;
   if (kind === 'facilitator') {
-    return (
-      '<div class="turn">' +
-      '<div class="stack">' +
-      '<div class="who">' + escapeHtml(name || 'Duck') + '</div>' +
-      '<div class="bubble them">' + renderMarkdown(m.text) + '</div>' +
-      '</div></div>'
-    );
+    return tpl('t-turn-duck', { name: name || 'Duck', text: renderMarkdown(m.text) });
   }
   // An event, not something anyone said: no bubble, and no name label above
   // a line that already starts with the name.
   if (kind === 'pass' || kind === 'system') {
-    const text = kind === 'pass' ? (mine ? 'You' : name) + ' passed' : m.text;
-    return '<div class="turn"><div class="note">' + escapeHtml(text) + '</div></div>';
+    return tpl('t-turn-note', { text: kind === 'pass' ? (mine ? 'You' : name) + ' passed' : m.text });
   }
+  let text = m.text;
   if (kind === 'state') {
     const mood = m.mood ? moodLabel(m.mood) : '';
-    const text = m.text || (name + (mood ? ' is ' + mood + '.' : ' checked in.'));
-    return (
-      '<div class="turn' + (mine ? ' mine' : '') + '">' +
-      '<div class="stack">' +
-      '<div class="who">' + escapeHtml(mine ? 'You' : name) + '</div>' +
-      '<div class="bubble ' + (mine ? 'mine' : 'them') + '">' + escapeHtml(text) + '</div>' +
-      '</div></div>'
-    );
+    text = m.text || (name + (mood ? ' is ' + mood + '.' : ' checked in.'));
   }
-  // contribution
-  return (
-    '<div class="turn' + (mine ? ' mine' : '') + '">' +
-    '<div class="stack">' +
-    '<div class="who">' + escapeHtml(mine ? 'You' : name) + '</div>' +
-    '<div class="bubble ' + (mine ? 'mine' : 'them') + '">' + escapeHtml(m.text) + '</div>' +
-    '</div></div>'
-  );
+  return mine ? tpl('t-turn-mine', { text: text }) : tpl('t-turn-them', { name: name, text: text });
 }
 
 function threadHtml(): string {
@@ -311,13 +258,11 @@ function threadHtml(): string {
 }
 
 function thinkingTurnHtml(): string {
-  return '<section id="thinking-turn" class="turn">' +
-    '<div class="bubble them muted">thinking...</div></section>';
+  return tpl('t-turn-thinking');
 }
 
 function bannerTurnHtml(text: string): string {
-  return '<section id="banner-turn" class="turn"><div class="bubble err">' +
-    escapeHtml(text) + '</div></section>';
+  return tpl('t-turn-error', { text: text });
 }
 
 type Composer = 'moods' | 'contribute' | 'waiting' | 'thinking' | 'failed' | 'offline';
@@ -332,10 +277,9 @@ function composerKind(): Composer {
 }
 
 function moodButtons(): string {
-  const disabled = state.busy ? ' disabled' : '';
+  const disabled = state.busy ? 'disabled' : '';
   return MOODS.map((m) =>
-    '<button type="button" id="' + m.buttonId + '" class="chip" data-m="' + m.id + '"' + disabled + '>' +
-    escapeHtml(m.label) + '</button>'
+    tpl('t-mood', { id: m.buttonId, mood: m.id, label: m.label, disabled: disabled })
   ).join('');
 }
 
@@ -343,61 +287,31 @@ function capLocked(): boolean {
   return !!(state.banner && (state.banner.code === 'session_cap' || state.banner.code === 'rate_limited'));
 }
 
-// One row for every state of the turn: the quiet actions on the left as
-// links, the one action that matters on the right. Settings moved up to the
-// header's menu, and pass and summary are links, so nothing down here
-// competes with Send for weight.
-function actionBar(left: string, right: string): string {
-  const summaryDisabled = lastFacilitatorText() ? '' : ' disabled';
-  return (
-    '<div class="bar">' + left +
-    '<button type="button" id="summary" class="link"' + summaryDisabled + '>Update summary</button>' +
-    (right ? '<span class="end">' + right + '</span>' : '') +
-    '</div>'
-  );
-}
-
+// One template per state of the turn, all sharing the summary link and the
+// info line. Which one shows is the only decision made here.
 function footerInner(kind: Composer): string {
-  const locked = state.busy ? ' disabled' : '';
   const info = state.banner && state.banner.kind === 'info' ? state.banner.text : '';
-  const infoHtml = info ? '<p class="info">' + escapeHtml(info) + '</p>' : '';
-  if (kind === 'moods') {
-    // Round 1 is the starting question, and these are its answers.
-    return (
-      '<p class="hint">Choose how you are doing. That counts as your turn.</p>' +
-      '<div class="chips">' + moodButtons() + '</div>' +
-      actionBar('', '') + infoHtml
-    );
-  }
+  const shared = {
+    summary: tpl('t-btn-summary', { disabled: lastFacilitatorText() ? '' : 'disabled' }),
+    info: info ? tpl('t-info', { text: info }) : '',
+  };
+  if (kind === 'moods') return tpl('t-footer-moods', { ...shared, moods: moodButtons() });
   if (kind === 'contribute') {
-    return (
-      '<textarea id="answer" rows="2" maxlength="' + SESSION_LIMITS.maxTextLength +
-      '" placeholder="Type here..." aria-label="Message to the group"' +
-      (state.busy ? ' disabled' : '') + '>' + escapeHtml(state.draft) + '</textarea>' +
-      actionBar(
-        '<button type="button" id="pass" class="link"' + locked + '>Pass this round</button>',
-        '<button type="button" id="send" class="primary"' + locked + '>Send</button>'
-      ) +
-      infoHtml
-    );
+    return tpl('t-footer-contribute', {
+      ...shared,
+      max: SESSION_LIMITS.maxTextLength,
+      draft: state.draft,
+      disabled: state.busy ? 'disabled' : '',
+    });
   }
-  if (kind === 'failed') {
-    const retry = capLocked() ? '' : '<button type="button" id="retry" class="primary">Retry</button>';
-    return actionBar('', retry) + infoHtml;
-  }
-  if (kind === 'waiting' || kind === 'thinking') {
-    return actionBar('', '') + infoHtml;
-  }
+  if (kind === 'failed') return tpl('t-footer-failed', { ...shared, retry: capLocked() ? '' : tpl('t-btn-retry') });
+  if (kind === 'waiting' || kind === 'thinking') return tpl('t-footer-waiting', shared);
   // 'offline' covers both "the socket dropped and we are on it" and "we have
   // stopped trying and only the user can decide what happens next".
   if (state.banner && state.banner.action === 'reconnect') {
-    return actionBar('', '<button type="button" id="reconnect" class="primary">Reconnect</button>') + infoHtml;
+    return tpl('t-footer-halted', { ...shared, reconnect: tpl('t-btn-reconnect') });
   }
-  return actionBar('', '<span class="muted tiny">Reconnecting...</span>') + infoHtml;
-}
-
-function footerHtml(kind: Composer): string {
-  return '<footer class="ftr" id="composer">' + footerInner(kind) + '</footer>';
+  return tpl('t-footer-reconnecting', shared);
 }
 
 // innerHTML rebuilds destroy the textarea; these remember caret/focus across
@@ -603,7 +517,7 @@ function patchSession(kind: Composer, focus?: boolean): boolean {
   // The round number moves on without the composer changing kind, so it has
   // to be patched here or the header keeps naming a round that is over.
   const title = document.getElementById('hdr-title');
-  if (title) title.innerHTML = escapeHtml('Round ' + state.round.id);
+  if (title) title.innerHTML = escapeHtml(roundLabel());
   sub.innerHTML = escapeHtml(subtitle());
   round.innerHTML = roundInner();
   appendNewTurns(thread);
@@ -630,17 +544,13 @@ function patchSession(kind: Composer, focus?: boolean): boolean {
 
 function paintSessionScreen(kind: Composer, focus?: boolean) {
   const thinking = state.round.status === 'thinking';
-  render(
-    '<div class="screen">' +
-    header({ lead: 'Round ' + state.round.id, sub: subtitle(), live: true, rail: presenceHtml() }) +
-    '<div id="round" aria-live="polite">' + roundInner() + '</div>' +
-    '<main class="body" id="thread" role="log" aria-live="polite" aria-relevant="additions"' +
-    (thinking ? ' aria-busy="true"' : '') + '>' +
-    threadHtml() +
-    '</main>' +
-    footerHtml(kind) +
-    '</div>'
-  );
+  render(tpl('t-session', {
+    header: sessionHeader(),
+    round: roundInner(),
+    busy: thinking ? 'true' : 'false',
+    thread: threadHtml(),
+    composer: footerInner(kind),
+  }));
   rememberPainted(kind);
   if (state.minimized) return;
   const thread = document.getElementById('thread');

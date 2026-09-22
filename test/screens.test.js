@@ -138,6 +138,20 @@ module.exports = async function run() {
   check('and the composer still shows it', el('answer').value, 'half a thought');
   check('and restores the caret', [el('answer').selectionStart, el('answer').selectionEnd], [4, 7]);
   check('and still names the new arrival', html().indexOf('Grace') > -1, true);
+
+  // Names land inside the rail's aria-label, a double-quoted attribute. A "
+  // left raw there ends the attribute and lets a peer's display name add its
+  // own, so every template blank is escaped for an attribute.
+  ws.last().incoming({
+    type: 'presence',
+    participants: [
+      { clientId: 'client-1', displayName: 'Ada', status: 'pending' },
+      { clientId: 'client-3', displayName: 'x" onmouseover="alert(1)', status: 'pending' },
+    ],
+  });
+  check('a quote in a display name cannot open an attribute of its own',
+    [html().indexOf('" onmouseover="') === -1, html().indexOf('x&quot; onmouseover=&quot;alert(1)') > -1],
+    [true, true]);
   const thread = el('thread');
   check('presence does not rebuild the chat log node', el('thread') === thread, true);
 

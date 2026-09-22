@@ -18,7 +18,21 @@
  * below), the same way a real DOM replace would, so scenarios do not need to
  * reset this between each other.
  */
+const fs = require('fs');
+const path = require('path');
+
 const els = {};
+
+// The markup lives in <template> elements in ui.html (see tpl in render.ts).
+// A real getElementById finds those whatever is painted into #root, so this
+// does too, reading them from the same file the build inlines.
+const templates = {};
+function loadTemplates() {
+  const src = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'ui.html'), 'utf8');
+  const re = /<template id="([^"]+)">([\s\S]*?)<\/template>/g;
+  let m;
+  while ((m = re.exec(src))) templates[m[1]] = m[2];
+}
 // The last HTML actually written to #root. Nothing has painted yet at
 // startup, so only 'root' itself (never part of its own content) resolves.
 let currentHtml = '';
@@ -93,6 +107,7 @@ function rerender(html) {
 // anything: an id nothing painted does not resolve to an element, whether
 // or not this stub has been asked for it before.
 function getElementById(id) {
+  if (Object.prototype.hasOwnProperty.call(templates, id)) return { innerHTML: templates[id] };
   if (id !== 'root' && currentHtml.indexOf('id="' + id + '"') === -1) return null;
   return el(id);
 }
@@ -113,6 +128,7 @@ const posted = [];
 const windowListeners = [];
 
 function install() {
+  loadTemplates();
   currentHtml = '';
   for (const k of Object.keys(els)) delete els[k];
   bodyClasses.clear();

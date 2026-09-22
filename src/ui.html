@@ -7,10 +7,26 @@
      because showUI passes themeColors. Everything here is built on those, so the
      panel tracks the editor's theme instead of guessing at it.
 
+     The one exception is the accent. FigJam's brand token is purple, and this
+     panel uses Figma's blue on purpose, so the accent is defined here, with
+     the light and dark values Figma itself uses, switched on the figma-dark
+     class Figma puts on <html>.
+
      Metrics come from the Rounds frames in the design file. They are written as
      offsets from --duck-font rather than as pixels, so the whole panel scales
      with the text size setting: at the default 11px the labels are 9px and the
      secondary text 10px, exactly as drawn. */
+  :root {
+    --accent: #0d99ff;
+    --accent-hover: #007be5;
+    --accent-pressed: #0768cf;
+    --on-accent: #ffffff;
+  }
+  html.figma-dark {
+    --accent: #0c8ce9;
+    --accent-hover: #0a6dc2;
+    --accent-pressed: #0a5aa8;
+  }
   * { box-sizing: border-box; }
   body {
     margin: 0;
@@ -57,14 +73,14 @@
     flex: 1 1 0; min-width: 0; height: 4px; border-radius: 2px;
     background: var(--figma-color-border);
   }
-  .seg.in { background: var(--figma-color-bg-brand); }
+  .seg.in { background: var(--accent); }
   .seg.passed { background: var(--figma-color-text-secondary); }
   /* Joining has no roster to draw yet, so the rail runs instead. The text
      under it already says what is happening, so reduced motion just holds it. */
   .rail.loading { position: relative; overflow: hidden; border-radius: 2px; background: var(--figma-color-border); }
   .rail.loading::after {
     content: ''; position: absolute; top: 0; bottom: 0; left: -30%; width: 30%;
-    border-radius: 2px; background: var(--figma-color-bg-brand);
+    border-radius: 2px; background: var(--accent);
     animation: run 1.4s ease-in-out infinite;
   }
   @keyframes run { from { left: -30%; } to { left: 100%; } }
@@ -128,11 +144,11 @@
   button:hover { background: var(--figma-color-bg-secondary); }
   button.primary {
     font-size: var(--duck-font, 11px); padding: 6px 16px;
-    background: var(--figma-color-bg-brand); color: var(--figma-color-text-onbrand);
+    background: var(--accent); color: var(--on-accent);
     border-color: transparent;
   }
-  button.primary:hover { background: var(--figma-color-bg-brand-hover); }
-  button.primary:active { background: var(--figma-color-bg-brand-pressed); }
+  button.primary:hover { background: var(--accent-hover); }
+  button.primary:active { background: var(--accent-pressed); }
   /* Links are for the actions that are not the turn: pass, summary, back. */
   button.link {
     border: none; background: none; padding: 4px 0; font-weight: 400;
@@ -159,7 +175,7 @@
     border-radius: 6px; border: 1px solid var(--figma-color-border);
     background: var(--figma-color-bg); color: var(--figma-color-text);
   }
-  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--figma-color-border-selected); }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
   textarea { resize: none; }
   label { display: block; }
 
@@ -174,7 +190,7 @@
   .bubble { border-radius: 8px; padding: 7px 9px; max-width: 82%; }
   .stack .bubble { max-width: 100%; }
   .bubble.them { background: var(--figma-color-bg-secondary); }
-  .bubble.mine { background: var(--figma-color-bg-brand); color: var(--figma-color-text-onbrand); }
+  .bubble.mine { background: var(--accent); color: var(--on-accent); }
   .bubble.err { border: 1px solid var(--figma-color-border-danger-strong); color: var(--figma-color-text-danger); }
   .bubble p { margin: 0; }
   .bubble p + p { margin-top: 6px; }
@@ -209,7 +225,7 @@
   /* Reduced motion removes the only cue the bob was carrying, so the tile
      itself has to speak: brand fill behind the duck. */
   @media (prefers-reduced-motion: reduce) {
-    .collapsed.turn { animation: none; background: var(--figma-color-bg-brand); }
+    .collapsed.turn { animation: none; background: var(--accent); }
   }
   /* The general button rule would otherwise give this a border, padding, and
      ellipsis, all wrong for a 70x70 icon that is the whole window. */
@@ -251,5 +267,319 @@
 <div id="grip-e" role="separator" aria-label="Resize panel width"></div>
 <div id="grip-s" role="separator" aria-label="Resize panel height"></div>
 <div id="grip" role="separator" aria-label="Resize panel"></div>
+
+<!--
+  ==========================================================================
+  MARKUP
+
+  Everything the panel draws is in the templates below, so it can be edited
+  here without touching TypeScript. The code only picks a template and fills
+  in its blanks:
+
+    {{name}}          text. Escaped by the code, so it is safe between tags
+                      and inside a quoted attribute.
+    {{{name}}}        markup the code built, usually another template here.
+    a bare {{name}}   where an attribute would go: a switch. The code puts
+                      disabled or selected there, or nothing.
+
+  Keep the ids. The code finds elements by id, and a few also depend on their
+  exact shape; those carry a note saying so.
+  ==========================================================================
+-->
+
+<!-- ===== Header ======================================================== -->
+
+<!-- The live session. #hdr-title and #hdr-sub are rewritten in place as the
+     round moves on. {{{rail}}} is t-rail. -->
+<template id="t-session-header">
+  <header class="hdr">
+    <div class="hdr-row">
+      <span id="hdr-title" class="hdr-title caps">{{lead}}</span>
+      <span class="hdr-dot" aria-hidden="true">&middot;</span>
+      <span id="hdr-sub" class="hdr-sub caps">{{sub}}</span>
+      <span class="fill"></span>
+      {{{min}}}
+      {{{menu}}}
+    </div>
+    {{{rail}}}
+  </header>
+</template>
+
+<!-- Joining, reconnecting, or not connected. -->
+<template id="t-connecting-header">
+  <header class="hdr">
+    <div class="hdr-row">
+      <span class="hdr-title caps">{{lead}}</span>
+      <span class="fill"></span>
+      {{{min}}}
+      {{{menu}}}
+    </div>
+    {{{rail}}}
+  </header>
+</template>
+
+<template id="t-settings-header">
+  <header class="hdr">
+    <div class="hdr-row">
+      <button type="button" id="back" class="icon" title="Back" aria-label="Back">&lsaquo;</button>
+      <span class="hdr-title caps">Settings</span>
+      <span class="fill"></span>
+      {{{min}}}
+    </div>
+  </header>
+</template>
+
+<template id="t-btn-min">
+  <button type="button" id="min" class="icon" title="Collapse to the duck" aria-label="Collapse to the duck">&ndash;</button>
+</template>
+
+<template id="t-btn-menu">
+  <button type="button" id="settings" class="icon" title="Settings" aria-label="Settings">&middot;&middot;&middot;</button>
+</template>
+
+<!-- ===== Rail ========================================================== -->
+
+<template id="t-rail">
+  <div id="presence" class="rail" role="list" aria-label="Round progress">{{{segments}}}</div>
+</template>
+
+<!-- One per person. {{tone}} is in, passed, or empty for still to answer. -->
+<template id="t-seg">
+  <span class="seg {{tone}}" role="listitem" aria-label="{{label}}"></span>
+</template>
+
+<template id="t-rail-nobody">
+  <span class="muted tiny">No one else is here yet.</span>
+</template>
+
+<template id="t-rail-loading">
+  <div class="rail loading" aria-hidden="true"></div>
+</template>
+
+<template id="t-rail-stopped">
+  <div class="rail"><span class="seg"></span></div>
+</template>
+
+<!-- ===== Session screen ================================================ -->
+
+<!-- Nothing may sit between #round's tags: the CSS hides it with :empty when
+     there is nothing to say, and whitespace counts as something. -->
+<template id="t-session">
+  <div class="screen">
+    {{{header}}}
+    <div id="round" aria-live="polite">{{{round}}}</div>
+    <main class="body" id="thread" role="log" aria-live="polite" aria-relevant="additions" aria-busy="{{busy}}">{{{thread}}}</main>
+    <footer class="ftr" id="composer">{{{composer}}}</footer>
+  </div>
+</template>
+
+<!-- The strip under the header while something holds the round up. -->
+<template id="t-blocker">
+  <div class="blocker">
+    <span class="blocker-text">{{text}}</span>
+    <span class="blocker-meta">{{meta}}</span>
+  </div>
+</template>
+
+<!-- ===== Thread ======================================================== -->
+
+<!-- The duck's reply. {{{text}}} is its markdown, rendered and made safe. -->
+<template id="t-turn-duck">
+  <div class="turn">
+    <div class="stack">
+      <div class="who">{{name}}</div>
+      <div class="bubble them">{{{text}}}</div>
+    </div>
+  </div>
+</template>
+
+<template id="t-turn-them">
+  <div class="turn">
+    <div class="stack">
+      <div class="who">{{name}}</div>
+      <div class="bubble them">{{text}}</div>
+    </div>
+  </div>
+</template>
+
+<template id="t-turn-mine">
+  <div class="turn mine">
+    <div class="stack">
+      <div class="who">You</div>
+      <div class="bubble mine">{{text}}</div>
+    </div>
+  </div>
+</template>
+
+<!-- A pass or a system line: an event, not something anyone said. -->
+<template id="t-turn-note">
+  <div class="turn"><div class="note">{{text}}</div></div>
+</template>
+
+<!-- These two are found and removed by id, so each must stay one <section>. -->
+<template id="t-turn-thinking">
+  <section id="thinking-turn" class="turn"><div class="bubble them muted">thinking...</div></section>
+</template>
+
+<template id="t-turn-error">
+  <section id="banner-turn" class="turn"><div class="bubble err">{{text}}</div></section>
+</template>
+
+<!-- ===== Footer ======================================================== -->
+
+<!-- Round 1: the starting question, answered with a mood. -->
+<template id="t-footer-moods">
+  <p class="hint">Choose how you are doing. That counts as your turn.</p>
+  <div class="chips">{{{moods}}}</div>
+  <div class="bar">
+    {{{summary}}}
+  </div>
+  {{{info}}}
+</template>
+
+<template id="t-mood">
+  <button type="button" id="{{id}}" class="chip" data-m="{{mood}}" {{disabled}}>{{label}}</button>
+</template>
+
+<!-- Round 2 on: type an answer, or pass. Keep the textarea on one line with
+     nothing between its tags, or that becomes text in the box. -->
+<template id="t-footer-contribute">
+  <textarea id="answer" rows="2" maxlength="{{max}}" placeholder="Type here..." aria-label="Message to the group" {{disabled}}>{{draft}}</textarea>
+  <div class="bar">
+    <button type="button" id="pass" class="link" {{disabled}}>Pass this round</button>
+    {{{summary}}}
+    <span class="end"><button type="button" id="send" class="primary" {{disabled}}>Send</button></span>
+  </div>
+  {{{info}}}
+</template>
+
+<!-- You have answered, or the duck is thinking. -->
+<template id="t-footer-waiting">
+  <div class="bar">
+    {{{summary}}}
+  </div>
+  {{{info}}}
+</template>
+
+<!-- The duck's reply failed. {{{retry}}} is empty once the session is capped. -->
+<template id="t-footer-failed">
+  <div class="bar">
+    {{{summary}}}
+    <span class="end">{{{retry}}}</span>
+  </div>
+  {{{info}}}
+</template>
+
+<!-- The connection stopped, and only the user can start it again. -->
+<template id="t-footer-halted">
+  <div class="bar">
+    {{{summary}}}
+    <span class="end">{{{reconnect}}}</span>
+  </div>
+  {{{info}}}
+</template>
+
+<template id="t-footer-reconnecting">
+  <div class="bar">
+    {{{summary}}}
+    <span class="end muted tiny">Reconnecting...</span>
+  </div>
+  {{{info}}}
+</template>
+
+<!-- In every footer. Switched off until the duck has said something. -->
+<template id="t-btn-summary">
+  <button type="button" id="summary" class="link" {{disabled}}>Update summary</button>
+</template>
+
+<template id="t-btn-retry">
+  <button type="button" id="retry" class="primary">Retry</button>
+</template>
+
+<template id="t-btn-reconnect">
+  <button type="button" id="reconnect" class="primary">Reconnect</button>
+</template>
+
+<template id="t-info">
+  <p class="info">{{text}}</p>
+</template>
+
+<!-- ===== Connecting screen ============================================= -->
+
+<template id="t-connecting">
+  <div class="screen">
+    {{{header}}}
+    <div class="idle" role="status" aria-live="polite">
+      <div class="idle-line">{{line}}</div>
+      {{{detail}}}
+      {{{error}}}
+      {{{action}}}
+    </div>
+  </div>
+</template>
+
+<template id="t-connecting-detail">
+  <div class="muted tiny">Everyone with this FigJam file open joins the same round.</div>
+</template>
+
+<template id="t-error">
+  <div class="bubble err">{{text}}</div>
+</template>
+
+<!-- ===== Settings screen =============================================== -->
+
+<template id="t-settings">
+  <div class="screen">
+    {{{header}}}
+    <div class="body">
+      <div class="field">
+        <label class="caps muted" for="text-size">Text size</label>
+        <select id="text-size">{{{sizes}}}</select>
+        <p class="muted tiny">Saved on this device.</p>
+      </div>
+      <div class="field">
+        <span class="caps muted">Panel</span>
+        <div class="bar"><button type="button" id="reset-size">Reset panel size</button></div>
+        <p class="muted tiny">Drag the right or bottom edge to resize. If the panel ends up bigger than your Figma window, reset it here.</p>
+      </div>
+    </div>
+  </div>
+</template>
+
+<template id="t-size-option">
+  <option value="{{px}}" {{selected}}>{{px}}px</option>
+</template>
+
+<!-- ===== Collapsed ===================================================== -->
+
+<!-- The whole 70x70 window. {{turn}} is turn while the round waits on this
+     user, which is what makes the duck bob. -->
+<template id="t-collapsed">
+  <button type="button" class="collapsed {{turn}}" id="collapsed" title="{{label}}" aria-label="{{label}}">{{{duck}}}</button>
+</template>
+
+<!-- The duck's head. {{fid}} is unique per copy, so two on one page never
+     share a filter. -->
+<template id="t-duck-head">
+  <svg width="{{size}}" height="{{size}}" viewBox="18 4 64 64" aria-hidden="true">
+    <defs>
+      <filter id="{{fid}}" x="-25%" y="-25%" width="150%" height="150%">
+        <feTurbulence type="fractalNoise" baseFrequency="0.045" numOctaves="2" seed="4" result="n"/>
+        <feDisplacementMap in="SourceGraphic" in2="n" scale="3"/>
+      </filter>
+    </defs>
+    <g filter="url(#{{fid}})" stroke="#C98A1F" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="50" cy="36" r="27" fill="#FFDD70"/>
+      <ellipse cx="49" cy="55" rx="13" ry="7" fill="#FF9F40"/>
+      <path d="M37 55 Q49 60 61 55" stroke="#C97116" stroke-width="2" fill="none"/>
+      <circle cx="40" cy="28" r="3.4" fill="#33261A" stroke="none"/>
+      <circle cx="60" cy="28" r="3.4" fill="#33261A" stroke="none"/>
+      <circle cx="41.2" cy="26.6" r="1" fill="#ffffff" stroke="none"/>
+      <circle cx="61.2" cy="26.6" r="1" fill="#ffffff" stroke="none"/>
+      <ellipse cx="31" cy="40" rx="6.5" ry="4.3" fill="#FFAFA0" stroke="none" opacity="0.6"/>
+      <ellipse cx="69" cy="40" rx="6.5" ry="4.3" fill="#FFAFA0" stroke="none" opacity="0.6"/>
+    </g>
+  </svg>
+</template>
 </body>
 </html>
