@@ -110,6 +110,7 @@ function openSocket(myGen: number) {
     return;
   }
   closeSocket();
+  socketHasSnapshot = false;
   state.ws = 'connecting';
   paint();
   let next: WebSocket;
@@ -191,9 +192,14 @@ function ingestMessage(message: ChatMessage): ChatMessage {
 // with what is here (both sides keep only the last maxMessages), and a reset
 // during round 1 keeps the round number.
 let roomSession = '';
+// The Worker answers a join with one snapshot, and the only other time it
+// sends one is a reset. So a second snapshot on the same socket is a new
+// session whatever it carries, which also covers a Worker that predates
+// session names.
+let socketHasSnapshot = false;
 
 function isNewSession(snap: Extract<ServerMessage, { type: 'snapshot' }>): boolean {
-  // A Worker older than session names still gives this much away.
+  if (socketHasSnapshot) return true;
   if (snap.round.id < state.round.id) return true;
   return !!(snap.session && roomSession && snap.session !== roomSession);
 }
@@ -219,6 +225,7 @@ function applyFrame(raw: unknown) {
       state.nudgedRound = 0;
     }
     state.gotSnapshot = true;
+    socketHasSnapshot = true;
     if (parsed.session) roomSession = parsed.session;
     if (parsed.roomId) state.roomId = parsed.roomId;
     if (parsed.you && parsed.you.clientId) state.clientId = parsed.you.clientId;

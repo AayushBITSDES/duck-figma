@@ -34,6 +34,17 @@ function html() {
   return dom.el('root').innerHTML;
 }
 
+// A real reconnect: the socket drops, the backoff timer opens a new one, and
+// the snapshot arrives on that. Sending a second snapshot down the same socket
+// is what a reset looks like instead.
+async function reconnect() {
+  ws.last().close(1006, '');
+  await new Promise((r) => setTimeout(r, 550));
+  const sock = ws.last();
+  sock.open();
+  return sock;
+}
+
 function live(b, extra) {
   b.deliver({ type: 'session', roomId: 'file:abc', clientId: 'client-1', displayName: 'Ada' });
   const sock = ws.last();
@@ -438,9 +449,19 @@ module.exports = async function run() {
     [html().indexOf('Grace is waiting on you.') > -1, again.state.nudgedBy], [false, '']);
   check('and the draft typed for the old round 1', again.state.draft, '');
 
+  // A Worker from before session names sends none, and a round-1 reset keeps
+  // the round number. The second snapshot on one socket still gives it away.
+  const legacy = boot();
+  const legacySock = live(legacy, { session: undefined, messages: roundOneMsgs, participants: resetSnap.participants });
+  legacySock.incoming({ type: 'nudged', by: 'Grace' });
+  legacy.state.draft = 'typed before an old Worker reset';
+  legacySock.incoming(Object.assign({}, resetSnap, { session: undefined }));
+  check('a reset from a Worker without session names still drops the nudge and the draft',
+    [html().indexOf('Grace is waiting on you.') > -1, legacy.state.draft], [false, '']);
+
   const rejoin = boot();
-  const rejoinSock = live(rejoin, { messages: roundOneMsgs });
-  rejoinSock.incoming({ type: 'nudged', by: 'Grace' });
+  live(rejoin, { messages: roundOneMsgs }).incoming({ type: 'nudged', by: 'Grace' });
+  const rejoinSock = await reconnect();
   rejoinSock.incoming({
     type: 'snapshot', roomId: 'file:abc', session: 's1', you: { clientId: 'client-1' },
     participants: [{ clientId: 'client-1', displayName: 'Ada', status: 'pending' }],
@@ -451,8 +472,9 @@ module.exports = async function run() {
   // Away long enough that the capped thread shares no turns with the one on
   // screen: still the same session, so the draft stays.
   const away = boot();
-  const awaySock = live(away, { messages: roundOneMsgs });
+  live(away, { messages: roundOneMsgs });
   away.state.draft = 'written before the laptop slept';
+  const awaySock = await reconnect();
   const missed = [];
   for (let i = 0; i < 100; i++) {
     missed.push({ id: 'later-' + i, at: 10 + i, kind: 'contribution', author: { clientId: 'client-2', displayName: 'Grace' }, text: 'Later ' + i });
