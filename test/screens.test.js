@@ -110,6 +110,23 @@ module.exports = async function run() {
   check('and the state reaches the room once it comes back',
     ws.last().sent.filter((m) => m.type === 'set-state').length, 1);
 
+  // The header status is where "your turn" and "thinking" are said now, so it
+  // has to be the live region a screen reader listens to.
+  check('the round and its demand are one live region',
+    /class="hdr-status" aria-live="polite" aria-atomic="true">[\s\S]*?id="hdr-title"[\s\S]*?id="hdr-sub"/.test(html()), true);
+
+  // The first facilitator line can arrive with no change to the composer's
+  // kind. The summary link has to come on anyway, not wait for the next
+  // round frame to repaint it.
+  const spoke = boot();
+  const spokeSock = live(spoke, { round: { id: 2, status: 'collecting' } });
+  check('before the duck speaks, summary is off', /id="summary"[^>]*\sdisabled/.test(html()), true);
+  spokeSock.incoming({
+    type: 'message',
+    message: { id: 'f1', at: 5, kind: 'facilitator', author: { clientId: 'duck', displayName: 'Duck' }, text: 'What is in your way?' },
+  });
+  check('a facilitator line alone turns summary on', /id="summary"[^>]*\sdisabled/.test(html()), false);
+
   const later = boot();
   live(later, { round: { id: 2, status: 'collecting' } });
   const laterHtml = html();

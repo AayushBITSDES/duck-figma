@@ -56,6 +56,10 @@
     border-bottom: 1px solid var(--figma-color-border);
   }
   .hdr-row { display: flex; align-items: center; gap: 5px; min-width: 0; }
+  /* Laid out exactly like the row it sits in, so wrapping the title and the
+     demand in one live region changes what a screen reader hears, not what
+     anyone sees. */
+  .hdr-status { display: flex; align-items: center; gap: 5px; min-width: 0; }
   .hdr-title { flex: none; color: var(--figma-color-text-secondary); white-space: nowrap; }
   /* The glyph buttons never give up width. At the largest text size the row
      overflows 280px, and it is the demand that truncates, not the controls. */
@@ -290,13 +294,17 @@
 <!-- ===== Header ======================================================== -->
 
 <!-- The live session. #hdr-title and #hdr-sub are rewritten in place as the
-     round moves on. {{{rail}}} is t-rail. -->
+     round moves on, and .hdr-status is a live region, so a screen reader
+     hears "Round 2, your turn" as one line when either changes. {{{rail}}}
+     is t-rail. -->
 <template id="t-session-header">
   <header class="hdr">
     <div class="hdr-row">
-      <span id="hdr-title" class="hdr-title caps">{{lead}}</span>
-      <span class="hdr-dot" aria-hidden="true">&middot;</span>
-      <span id="hdr-sub" class="hdr-sub caps">{{sub}}</span>
+      <span class="hdr-status" aria-live="polite" aria-atomic="true">
+        <span id="hdr-title" class="hdr-title caps">{{lead}}</span>
+        <span class="hdr-dot" aria-hidden="true">&middot;</span>
+        <span id="hdr-sub" class="hdr-sub caps">{{sub}}</span>
+      </span>
       <span class="fill"></span>
       {{{min}}}
       {{{menu}}}

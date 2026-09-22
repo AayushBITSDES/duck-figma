@@ -122,10 +122,13 @@ function pluginFigma(store, posted, resizes, intervals) {
     },
     viewport: { center: { x: 0, y: 0 } },
     getNodeByIdAsync: async (id) => stickies.filter((s) => s.id === id)[0] || null,
-    createSticky: () => {
+    // A method so the new sticky can go where Figma puts one: the page in
+    // view at the moment of the call.
+    createSticky() {
       const sticky = {
         id: 'sticky-summary',
         type: 'STICKY',
+        parent: this.currentPage,
         name: '',
         x: 0,
         y: 0,

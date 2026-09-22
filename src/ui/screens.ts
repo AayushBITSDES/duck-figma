@@ -420,6 +420,12 @@ let paintedInfo = '';
 let paintedThinking = false;
 let paintedBanner = '';
 let paintedBusy = false;
+let paintedSummary = false;
+// What the two live regions last said. They are rewritten only when that
+// changes: a screen reader can re-announce a region whenever its nodes are
+// replaced, and patchSession runs on every presence tick.
+let paintedStatus = '';
+let paintedRound = '';
 
 function sessionDomReady(): boolean {
   return !!(
@@ -464,6 +470,9 @@ function rememberPainted(kind: Composer) {
   paintedThinking = state.round.status === 'thinking';
   paintedBanner = state.banner && state.banner.kind === 'error' ? state.banner.text : '';
   paintedBusy = state.busy;
+  paintedSummary = !!lastFacilitatorText();
+  paintedStatus = roundLabel() + '|' + subtitle();
+  paintedRound = roundInner();
 }
 
 function stripTagged(html: string, id: string): string {
@@ -516,10 +525,18 @@ function patchSession(kind: Composer, focus?: boolean): boolean {
   presence.innerHTML = presenceInner();
   // The round number moves on without the composer changing kind, so it has
   // to be patched here or the header keeps naming a round that is over.
-  const title = document.getElementById('hdr-title');
-  if (title) title.innerHTML = escapeHtml(roundLabel());
-  sub.innerHTML = escapeHtml(subtitle());
-  round.innerHTML = roundInner();
+  const status = roundLabel() + '|' + subtitle();
+  if (status !== paintedStatus) {
+    const title = document.getElementById('hdr-title');
+    if (title) title.innerHTML = escapeHtml(roundLabel());
+    sub.innerHTML = escapeHtml(subtitle());
+    paintedStatus = status;
+  }
+  const strip = roundInner();
+  if (strip !== paintedRound) {
+    round.innerHTML = strip;
+    paintedRound = strip;
+  }
   appendNewTurns(thread);
   syncThreadExtras(thread);
 
@@ -527,12 +544,17 @@ function patchSession(kind: Composer, focus?: boolean): boolean {
   // busy is in here because footerInner spells the disabled state into the
   // markup: without it an action that leaves the composer on the same kind
   // (every board wait) paints nothing, and a second click in that gap is
-  // dropped by withBoard with no sign it ever landed.
-  if (kind !== paintedComposer || info !== paintedInfo || state.busy !== paintedBusy) {
+  // dropped by withBoard with no sign it ever landed. The summary switch is
+  // here for the same reason: the first facilitator line can land without
+  // the composer changing kind, and today only the Worker's habit of sending
+  // the next round frame straight after it was turning the button on.
+  const summary = !!lastFacilitatorText();
+  if (kind !== paintedComposer || info !== paintedInfo || state.busy !== paintedBusy || summary !== paintedSummary) {
     composer.innerHTML = footerInner(kind);
     paintedComposer = kind;
     paintedInfo = info;
     paintedBusy = state.busy;
+    paintedSummary = summary;
     wireFooter(kind, !!focus);
   } else if (focus) {
     wireFooter(kind, true);
@@ -581,6 +603,9 @@ export function showSession(opts?: { focus?: boolean }) {
   paintedThinking = false;
   paintedBanner = '';
   paintedBusy = false;
+  paintedSummary = false;
+  paintedStatus = '';
+  paintedRound = '';
   paintSessionScreen(kind, focus);
   if (!focus) restoreFocus(prevFocus);
 }

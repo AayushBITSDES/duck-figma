@@ -51,6 +51,10 @@ function makeFigma(opts) {
   const page = {
     id: opts.pageId || 'page-1',
     type: 'PAGE',
+    appendChild: (n) => {
+      n.parent = page;
+      if (nodes.indexOf(n) === -1) nodes.push(n);
+    },
     findAll: (pred) => {
       accessed.findAll += 1;
       return typeof pred === 'function' ? nodes.filter(pred) : nodes.slice();
@@ -90,8 +94,10 @@ function makeFigma(opts) {
       setAsync: async (k, v) => { store[k] = v; },
       deleteAsync: async (k) => { delete store[k]; },
     },
+    // Like Figma's, onto whichever page is in view at the moment of the call,
+    // not the page the plugin started on.
     createSticky: () => {
-      const sticky = makeSticky('s' + nextStickyId++, { parent: page });
+      const sticky = makeSticky('s' + nextStickyId++, { parent: figma.currentPage });
       stickies.push(sticky);
       nodes.push(sticky);
       nodeById[sticky.id] = sticky;
@@ -506,6 +512,34 @@ module.exports = async function run() {
     [here.text.characters, sumEnv.stickies.length], ['Started here', 0]);
   check('and leaves the other page remembering nothing',
     [sumEnv.pageData.duckSummaryNodeId, otherData.duckSummaryNodeId], [here.id, undefined]);
+
+  // The same switch when the remembered sticky is gone, so the lookup comes
+  // back empty and a new one is made. createSticky lands on the page in view,
+  // so unpinned the summary was created on the other page, remembered on
+  // this one, and assigned to this page's selection.
+  ({ env: sumEnv, mod: summary } = loadPlugin('summary'));
+  const home = sumEnv.figma.currentPage;
+  const awayData = {};
+  const away = {
+    id: 'page-away',
+    type: 'PAGE',
+    selection: [],
+    getPluginData: (k) => awayData[k] || '',
+    setPluginData: (k, v) => { awayData[k] = String(v); },
+    findAll: () => [],
+  };
+  sumEnv.pageData.duckSummaryNodeId = 'deleted-sticky';
+  sumEnv.figma.getNodeByIdAsync = async () => {
+    sumEnv.figma.currentPage = away;
+    return null;
+  };
+  await summary.updateSummary('Made here');
+  check('a sticky created after a mid-lookup switch lands on the page the click came from',
+    [sumEnv.stickies.length, sumEnv.stickies[0] && sumEnv.stickies[0].parent === home],
+    [1, true]);
+  check('and is the one that page remembers and selects',
+    [sumEnv.pageData.duckSummaryNodeId, home.selection[0] && home.selection[0].id, away.selection.length],
+    [sumEnv.stickies[0] && sumEnv.stickies[0].id, sumEnv.stickies[0] && sumEnv.stickies[0].id, 0]);
 
   const throughCode = bootPlugin({ duckClientId: 'client-01' }, { fileKey: 'F', cx: 0, cy: 0 });
   await settled();

@@ -91,6 +91,9 @@ async function runUpdate(raw: string) {
   // sticky we just made on the old one, and stamp this text over someone
   // else's.
   const startedOn = figma.currentPage;
+  // Where the user was looking when they clicked, for the same reason: after
+  // a page switch, figma.viewport describes the other page.
+  const at = { x: figma.viewport.center.x, y: figma.viewport.center.y };
   let sticky: StickyNode | null = null;
   let created = false;
   try {
@@ -98,6 +101,11 @@ async function runUpdate(raw: string) {
     if (!sticky) {
       sticky = figma.createSticky();
       created = true;
+      // createSticky puts the node on whichever page is in view, and the
+      // lookup above can await. Switched in that gap, the summary would land
+      // on the other page while this one remembered it, and selecting it
+      // here would throw.
+      if (sticky.parent !== startedOn) startedOn.appendChild(sticky);
     }
   } catch {
     postError("Couldn't create a session summary sticky.");
@@ -135,8 +143,8 @@ async function runUpdate(raw: string) {
 
   tagSummary(sticky, startedOn);
   if (created) {
-    sticky.x = Math.round(figma.viewport.center.x - sticky.width / 2);
-    sticky.y = Math.round(figma.viewport.center.y - sticky.height / 2);
+    sticky.x = Math.round(at.x - sticky.width / 2);
+    sticky.y = Math.round(at.y - sticky.height / 2);
   }
   startedOn.selection = [sticky];
   figma.notify(created ? 'Dropped the session summary on your board.' : 'Updated the session summary.');
