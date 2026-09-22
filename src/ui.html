@@ -5,7 +5,24 @@
 <style>
   /* Figma injects --figma-color-* and a figma-light/figma-dark class on <html>
      because showUI passes themeColors. Everything here is built on those, so the
-     panel tracks the editor's theme instead of guessing at it. */
+     panel tracks the editor's theme instead of guessing at it.
+
+     The one exception is the accent: FigJam's brand token is purple, and this
+     panel uses Figma's blue, with Figma's light and dark values.
+
+     Sizes are offsets from --duck-font rather than pixels, so the whole panel
+     scales with the text size setting. */
+  :root {
+    --accent: #0d99ff;
+    --accent-hover: #007be5;
+    --accent-pressed: #0768cf;
+    --on-accent: #ffffff;
+  }
+  html.figma-dark {
+    --accent: #0c8ce9;
+    --accent-hover: #0a6dc2;
+    --accent-pressed: #0a5aa8;
+  }
   * { box-sizing: border-box; }
   body {
     margin: 0;
@@ -18,81 +35,166 @@
   }
   #root { height: 100vh; }
   .screen { display: flex; flex-direction: column; height: 100%; }
-
-  .hdr {
-    flex: 0 0 auto;
-    display: flex; align-items: center; gap: 8px;
-    padding: 10px 12px;
-    border-bottom: 1px solid var(--figma-color-border);
-  }
-  .hdr-title { font-weight: 600; }
-  .hdr-sub { color: var(--figma-color-text-secondary); }
-
-  .body { flex: 1 1 auto; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
-  .ftr { flex: 0 0 auto; padding: 8px 12px 12px; display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--figma-color-border); }
-  .row { display: flex; gap: 6px; }
-  .row > * { flex: 1; min-width: 0; }
-  .ftr > button { width: 100%; }
   .muted { color: var(--figma-color-text-secondary); }
   .tiny { font-size: calc(var(--duck-font, 11px) - 1px); }
-
-  .presence {
-    flex: 0 0 auto;
-    display: flex; flex-wrap: wrap; gap: 4px;
-    padding: 8px 12px 0;
+  .caps {
+    font-size: calc(var(--duck-font, 11px) - 2px);
+    font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase;
   }
-  .chip {
-    border: 1px solid var(--figma-color-border);
-    border-radius: 999px;
-    padding: 2px 8px;
+  .fill { flex: 1 1 auto; }
+
+  /* The header carries the round, what the round wants from you, and the rail.
+     The round number recedes; the demand does not. */
+  .hdr {
+    flex: 0 0 auto;
+    display: flex; flex-direction: column; gap: 8px;
+    padding: 10px 10px 10px 12px;
+    border-bottom: 1px solid var(--figma-color-border);
+  }
+  .hdr-row { display: flex; align-items: center; gap: 5px; min-width: 0; }
+  /* Laid out exactly like the row it sits in, so wrapping the title and the
+     demand in one live region changes what a screen reader hears, not what
+     anyone sees. */
+  .hdr-status { display: flex; align-items: center; gap: 5px; min-width: 0; }
+  .hdr-title { flex: none; color: var(--figma-color-text-secondary); white-space: nowrap; }
+  /* The glyph buttons never give up width. At the largest text size the row
+     overflows 280px, and it is the demand that truncates, not the controls. */
+  .hdr-row > button { flex: none; }
+  .hdr-dot { color: var(--figma-color-text-secondary); font-size: calc(var(--duck-font, 11px) - 2px); }
+  .hdr-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+
+  /* One segment per person, and colour is the whole vocabulary: brand for in,
+     border for still out, secondary for passed. The room caps a session at
+     eight, so a segment never gets narrower than a few pixels. It replaces the
+     presence chips, the round line and the header subtitle, which printed the
+     same fact in three places. */
+  .rail { display: flex; gap: 3px; min-height: 4px; }
+  .seg {
+    flex: 1 1 0; min-width: 0; height: 4px; border-radius: 2px;
+    background: var(--figma-color-border);
+  }
+  .seg.in { background: var(--accent); }
+  .seg.passed { background: var(--figma-color-text-secondary); }
+  /* Joining has no roster to draw yet, so the rail runs instead. The text
+     under it already says what is happening, so reduced motion just holds it. */
+  .rail.loading { position: relative; overflow: hidden; border-radius: 2px; background: var(--figma-color-border); }
+  .rail.loading::after {
+    content: ''; position: absolute; top: 0; bottom: 0; left: -30%; width: 30%;
+    border-radius: 2px; background: var(--accent);
+    animation: run 1.4s ease-in-out infinite;
+  }
+  @keyframes run { from { left: -30%; } to { left: 100%; } }
+  @media (prefers-reduced-motion: reduce) {
+    .rail.loading::after { animation: none; left: 0; width: 100%; opacity: 0.35; }
+  }
+
+  /* The status strip only exists while something is holding the round up:
+     someone yet to answer, a failed reply, a dropped socket. When there is
+     nothing to say it takes no space at all. */
+  #round:empty { display: none; }
+  .blocker {
+    display: flex; flex-direction: column; gap: 7px;
+    padding: 9px 12px 10px;
+    background: var(--figma-color-bg-secondary);
+    border-bottom: 1px solid var(--figma-color-border);
+  }
+  .blocker-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .blocker-text {
+    flex: 1 1 auto; min-width: 0; font-weight: 500;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .blocker-meta {
+    flex: 0 0 auto; font-variant-numeric: tabular-nums;
+    font-size: calc(var(--duck-font, 11px) - 1px);
     color: var(--figma-color-text-secondary);
   }
-  .chip.you { color: var(--figma-color-text); }
-  .chip.done { background: var(--figma-color-bg-secondary); }
-  .round { flex: 0 0 auto; margin: 0; padding: 6px 12px 0; }
-  .stack { display: flex; flex-direction: column; gap: 2px; max-width: 82%; }
-  .turn.mine .stack { align-items: flex-end; }
-  .who { color: var(--figma-color-text-secondary); font-size: calc(var(--duck-font, 11px) - 1px); }
-  .stack .bubble { max-width: 100%; }
 
+  .body { flex: 1 1 auto; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+
+  /* One row for the turn: the quiet actions on the left, the one that matters
+     on the right, so the footer leaves the thread its height. */
+  .ftr {
+    flex: 0 0 auto;
+    display: flex; flex-direction: column; gap: 8px;
+    padding: 9px 12px 11px;
+    border-top: 1px solid var(--figma-color-border);
+  }
+  /* Wraps rather than shrinks. At the larger text sizes the row stops fitting
+     280px, and a flex row that shrinks ellipsizes every label in it, Send
+     included. Wrapping drops Send to its own line instead, still pinned
+     right. */
+  .bar { display: flex; align-items: center; flex-wrap: wrap; column-gap: 10px; row-gap: 6px; min-width: 0; }
+  .bar > * { flex: none; }
+  .bar > .end { margin-left: auto; }
+  .hint { margin: 0; font-size: calc(var(--duck-font, 11px) - 2px); color: var(--figma-color-text-secondary); }
+  .info { margin: 0; font-size: calc(var(--duck-font, 11px) - 1px); color: var(--figma-color-text-secondary); }
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; }
+
+  /* The bare element is the secondary button, so anything left unclassed still
+     reads as a control. No fixed height anywhere: a fixed box clipped its own
+     label once --duck-font passed about 14px, so the padding grows it instead. */
   button {
-    /* min-height, not height: a fixed box clipped its own label the moment
-       --duck-font went past about 14px, which is most of the range the
-       settings screen offers. The floor keeps the hit target comfortable at
-       the small end, and the padding lets it grow from there. */
-    font: inherit; min-height: 28px; padding: 5px 10px;
+    font: inherit; font-size: calc(var(--duck-font, 11px) - 1px); font-weight: 500;
+    line-height: 1.45; padding: 5px 10px;
     border-radius: 6px; border: 1px solid var(--figma-color-border);
     background: var(--figma-color-bg); color: var(--figma-color-text);
-    cursor: pointer; text-align: left; white-space: nowrap;
+    cursor: pointer; text-align: center; white-space: nowrap;
     overflow: hidden; text-overflow: ellipsis;
   }
   button:hover { background: var(--figma-color-bg-secondary); }
-  button.primary { background: var(--figma-color-bg-brand); color: var(--figma-color-text-onbrand); border-color: transparent; }
-  button.primary:hover { background: var(--figma-color-bg-brand-hover); }
-  button.primary:active { background: var(--figma-color-bg-brand-pressed); }
-  button.ghost { border-color: transparent; color: var(--figma-color-text-secondary); background: none; }
-  button.ghost:hover { color: var(--figma-color-text); background: var(--figma-color-bg-secondary); }
-  button:disabled { opacity: 0.4; cursor: default; }
-  button:disabled:hover { background: var(--figma-color-bg); }
+  button.primary {
+    font-size: var(--duck-font, 11px); padding: 6px 16px;
+    background: var(--accent); color: var(--on-accent);
+    border-color: transparent;
+  }
+  button.primary:hover { background: var(--accent-hover); }
+  button.primary:active { background: var(--accent-pressed); }
+  /* The strip's controls: the frame's 10px medium, on the same shapes. */
+  button.small { font-size: calc(var(--duck-font, 11px) - 1px); padding: 5px 10px; }
+  /* The second tap of a control that clears something for everyone. */
+  button.danger { color: var(--figma-color-text-danger); border-color: var(--figma-color-border-danger-strong); }
+  /* Links are for the actions that are not the turn: pass, summary, back. */
+  button.link {
+    border: none; background: none; padding: 4px 0; font-weight: 400;
+    color: var(--figma-color-text-secondary);
+  }
+  button.link:hover { color: var(--figma-color-text); background: none; }
+  button.chip {
+    border-radius: 999px; padding: 3px 8px; font-weight: 400;
+    color: var(--figma-color-text-secondary);
+  }
+  button.chip:hover { color: var(--figma-color-text); }
+  /* Header glyphs stay at body size and never pick up the button chrome. */
+  button.icon {
+    border: none; background: none; padding: 0 4px; border-radius: 4px;
+    font-size: var(--duck-font, 11px); font-weight: 400; line-height: 16px;
+    color: var(--figma-color-text-secondary);
+  }
+  button.icon:hover { color: var(--figma-color-text); background: var(--figma-color-bg-secondary); }
+  /* No hover states on a dead control, whatever its variant draws. */
+  button:disabled { opacity: 0.4; cursor: default; pointer-events: none; }
 
   input, select, textarea {
-    font: inherit; width: 100%; padding: 6px 8px;
+    font: inherit; width: 100%; padding: 7px 9px;
     border-radius: 6px; border: 1px solid var(--figma-color-border);
     background: var(--figma-color-bg); color: var(--figma-color-text);
   }
-  input:focus, select:focus, textarea:focus {
-    outline: none;
-    border-color: var(--figma-color-border-selected);
-    box-shadow: inset 0 0 0 1px var(--figma-color-border-selected);
-  }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
   textarea { resize: none; }
-  label { display: block; margin-bottom: 4px; color: var(--figma-color-text-secondary); }
+  label { display: block; }
 
   .turn { display: flex; gap: 6px; align-items: flex-end; }
   .turn.mine { justify-content: flex-end; }
+  .stack { display: flex; flex-direction: column; gap: 2px; max-width: 82%; }
+  .turn.mine .stack { align-items: flex-end; }
+  .who { color: var(--figma-color-text-secondary); font-size: calc(var(--duck-font, 11px) - 1px); }
+  /* A pass or a system line is an event, not something anyone said, so it
+     gets no bubble and no name label repeating the name inside it. */
+  .note { color: var(--figma-color-text-secondary); font-size: calc(var(--duck-font, 11px) - 1px); }
   .bubble { border-radius: 8px; padding: 7px 9px; max-width: 82%; }
+  .stack .bubble { max-width: 100%; }
   .bubble.them { background: var(--figma-color-bg-secondary); }
-  .bubble.mine { background: var(--figma-color-bg-brand); color: var(--figma-color-text-onbrand); }
+  .bubble.mine { background: var(--accent); color: var(--on-accent); }
   .bubble.err { border: 1px solid var(--figma-color-border-danger-strong); color: var(--figma-color-text-danger); }
   .bubble p { margin: 0; }
   .bubble p + p { margin-top: 6px; }
@@ -105,34 +207,38 @@
   .bubble pre { margin: 0; overflow-x: auto; background: rgba(127, 127, 127, 0.16); border-radius: 6px; padding: 6px 8px; }
   .bubble pre code { background: none; padding: 0; }
 
-  /* Connecting: the duck is chrome, not a control. */
-  .idle { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; height: 100%; padding: 12px; text-align: center; }
-  .idle-duck { animation: bob 2.6s ease-in-out infinite; }
-  @keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
-  @media (prefers-reduced-motion: reduce) { .idle-duck { animation: none; } }
+  /* Connecting and not-connected: one centred line, and the one control that
+     can change it when there is one. */
+  .idle { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 12px; text-align: center; }
+  .idle-line { font-weight: 500; }
 
-  /* Collapsed: the whole 70x70 window is duck, and the whole thing is the
-     click target. 70 is figma.showUI's hard floor for width. */
+  /* Settings: labelled groups on the grid, not a form. */
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field > p { margin: 0; }
+
+  /* Collapsed: the whole 70x70 window is the duck's head, and the whole thing
+     is the click target. 70 is figma.showUI's hard floor for width.
+     It is still by default and bobs only while the round is waiting on this
+     user: an always-bobbing duck said nothing, because a signal that is always
+     on is not a signal. */
   .collapsed { display: flex; align-items: center; justify-content: center;
-    height: 100vh; cursor: pointer; animation: bob 2.6s ease-in-out infinite; }
+    height: 100vh; cursor: pointer; }
+  .collapsed.turn { animation: bob 2.6s ease-in-out infinite; }
   .collapsed:hover { animation-play-state: paused; }
-  @media (prefers-reduced-motion: reduce) { .collapsed { animation: none; } }
-  /* The general button rule would otherwise give this a border, min-height,
-     and ellipsis — all wrong for a 70x70 icon that is the whole window. */
+  @keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+  /* Reduced motion removes the only cue the bob was carrying, so the tile
+     itself has to speak: brand fill behind the duck. */
+  @media (prefers-reduced-motion: reduce) {
+    .collapsed.turn { animation: none; background: var(--accent); }
+  }
+  /* The general button rule would otherwise give this a border, padding, and
+     ellipsis, all wrong for a 70x70 icon that is the whole window. */
   button.collapsed {
-    width: 100%; min-height: 0; padding: 0; border: none;
+    width: 100%; padding: 0; border: none; border-radius: 0;
     background: transparent; white-space: normal; overflow: visible;
     text-overflow: clip; color: inherit;
   }
-  button.collapsed:hover,
-  button.collapsed:disabled:hover { background: transparent; }
-
-  /* min-height on button would win over this height, so it is reset here.
-     This one is an icon, not a label: it should stay 18px at every text size. */
-  button.mini { position: absolute; top: 6px; right: 6px; height: 18px;
-    min-height: 0; width: 18px; padding: 0; text-align: center; line-height: 1;
-    opacity: 0.5; }
-  button.mini:hover { opacity: 1; }
+  button.collapsed:hover { background: transparent; }
 
   /* Figma gives a plugin window no resize handle of its own and fires no
      resize event, so the panel has to draw its own grips and ask the plugin
@@ -140,8 +246,8 @@
      Three of them: the corner drives both axes, the edges lock to one, so
      widening the panel doesn't drag its height along for the ride. */
   #grip-e, #grip-s, #grip { position: fixed; touch-action: none; }
-  /* 6px strips. The body's own padding is 12px and the minimize button sits
-     6px in from the right at 18px wide, so neither strip covers a control. */
+  /* 6px strips. The header's right padding is 10px and everything else sits
+     12px in, so neither strip covers a control. */
   #grip-e { top: 0; right: 0; width: 6px; height: 100vh; cursor: ew-resize; }
   #grip-s { left: 0; bottom: 0; height: 6px; width: 100vw; cursor: ns-resize; }
   /* Last so it wins the overlap at the corner where all three meet. */
@@ -165,5 +271,366 @@
 <div id="grip-e" role="separator" aria-label="Resize panel width"></div>
 <div id="grip-s" role="separator" aria-label="Resize panel height"></div>
 <div id="grip" role="separator" aria-label="Resize panel"></div>
+
+<!--
+  ==========================================================================
+  MARKUP
+
+  Everything the panel draws is in the templates below, so it can be edited
+  here without touching TypeScript. The code only picks a template and fills
+  in its blanks:
+
+    {{name}}          text. Escaped by the code, so it is safe between tags
+                      and inside a quoted attribute.
+    {{{name}}}        markup the code built, usually another template here.
+    a bare {{name}}   where an attribute would go: a switch. The code puts
+                      disabled or selected there, or nothing.
+
+  Keep the ids. The code finds elements by id, and a few also depend on their
+  exact shape; those carry a note saying so.
+  ==========================================================================
+-->
+
+<!-- ===== Header ======================================================== -->
+
+<!-- The live session. #hdr-title and #hdr-sub are rewritten in place as the
+     round moves on, and .hdr-status is a live region, so a screen reader
+     hears "Round 2, your turn" as one line when either changes. {{{rail}}}
+     is t-rail. -->
+<template id="t-session-header">
+  <header class="hdr">
+    <div class="hdr-row">
+      <span class="hdr-status" aria-live="polite" aria-atomic="true">
+        <span id="hdr-title" class="hdr-title caps">{{lead}}</span>
+        <span class="hdr-dot" aria-hidden="true">&middot;</span>
+        <span id="hdr-sub" class="hdr-sub caps">{{sub}}</span>
+      </span>
+      <span class="fill"></span>
+      {{{min}}}
+      {{{menu}}}
+    </div>
+    {{{rail}}}
+  </header>
+</template>
+
+<!-- Joining, reconnecting, or not connected. -->
+<template id="t-connecting-header">
+  <header class="hdr">
+    <div class="hdr-row">
+      <span class="hdr-title caps">{{lead}}</span>
+      <span class="fill"></span>
+      {{{min}}}
+      {{{menu}}}
+    </div>
+    {{{rail}}}
+  </header>
+</template>
+
+<template id="t-settings-header">
+  <header class="hdr">
+    <div class="hdr-row">
+      <button type="button" id="back" class="icon" title="Back" aria-label="Back">&lsaquo;</button>
+      <span class="hdr-title caps">Settings</span>
+      <span class="fill"></span>
+      {{{min}}}
+    </div>
+  </header>
+</template>
+
+<template id="t-btn-min">
+  <button type="button" id="min" class="icon" title="Collapse to the duck" aria-label="Collapse to the duck">&ndash;</button>
+</template>
+
+<template id="t-btn-menu">
+  <button type="button" id="settings" class="icon" title="Settings" aria-label="Settings">&middot;&middot;&middot;</button>
+</template>
+
+<!-- ===== Rail ========================================================== -->
+
+<template id="t-rail">
+  <div id="presence" class="rail" role="list" aria-label="Round progress">{{{segments}}}</div>
+</template>
+
+<!-- One per person. {{tone}} is in, passed, or empty for still to answer. -->
+<template id="t-seg">
+  <span class="seg {{tone}}" role="listitem" aria-label="{{label}}"></span>
+</template>
+
+<template id="t-rail-nobody">
+  <span class="muted tiny">No one else is here yet.</span>
+</template>
+
+<template id="t-rail-loading">
+  <div class="rail loading" aria-hidden="true"></div>
+</template>
+
+<template id="t-rail-stopped">
+  <div class="rail"><span class="seg"></span></div>
+</template>
+
+<!-- ===== Session screen ================================================ -->
+
+<!-- Nothing may sit between #round's tags: the CSS hides it with :empty when
+     there is nothing to say, and whitespace counts as something. -->
+<template id="t-session">
+  <div class="screen">
+    {{{header}}}
+    <div id="round" aria-live="polite">{{{round}}}</div>
+    <main class="body" id="thread" role="log" aria-live="polite" aria-relevant="additions" aria-busy="{{busy}}">{{{thread}}}</main>
+    <footer class="ftr" id="composer">{{{composer}}}</footer>
+  </div>
+</template>
+
+<!-- The strip under the header while something holds the round up.
+     {{{actions}}} is t-blocker-actions, or empty. -->
+<template id="t-blocker">
+  <div class="blocker">
+    <div class="blocker-row">
+      <span class="blocker-text">{{text}}</span>
+      <span class="blocker-meta">{{meta}}</span>
+    </div>
+    {{{actions}}}
+  </div>
+</template>
+
+<!-- Offered to anyone who has answered while someone else has not.
+     Go on without starts the countdown in t-countdown. {{nudged}} switches
+     Nudge off for as long as the Worker would refuse another. -->
+<template id="t-blocker-actions">
+  <div class="bar">
+    <button type="button" id="nudge" class="primary small" {{nudged}}>{{nudge}}</button>
+    <button type="button" id="close-round" class="small">{{close}}</button>
+  </div>
+</template>
+
+<!-- The countdown after someone chose to go on without the holdouts. The code
+     writes the seconds into #round-clock in place, so keep that id; it is
+     hidden from screen readers, which hear the text once instead of a number
+     every second. -->
+<template id="t-countdown">
+  <div class="blocker">
+    <div class="blocker-row">
+      <span class="blocker-text">{{text}}</span>
+      <span id="round-clock" class="blocker-meta" aria-hidden="true"></span>
+    </div>
+  </div>
+</template>
+
+<!-- ===== Thread ======================================================== -->
+
+<!-- The duck's reply. {{{text}}} is its markdown, rendered and made safe. -->
+<template id="t-turn-duck">
+  <div class="turn">
+    <div class="stack">
+      <div class="who">{{name}}</div>
+      <div class="bubble them">{{{text}}}</div>
+    </div>
+  </div>
+</template>
+
+<template id="t-turn-them">
+  <div class="turn">
+    <div class="stack">
+      <div class="who">{{name}}</div>
+      <div class="bubble them">{{text}}</div>
+    </div>
+  </div>
+</template>
+
+<template id="t-turn-mine">
+  <div class="turn mine">
+    <div class="stack">
+      <div class="who">You</div>
+      <div class="bubble mine">{{text}}</div>
+    </div>
+  </div>
+</template>
+
+<!-- A pass or a system line: an event, not something anyone said. -->
+<template id="t-turn-note">
+  <div class="turn"><div class="note">{{text}}</div></div>
+</template>
+
+<!-- These two are found and removed by id, so each must stay one <section>. -->
+<template id="t-turn-thinking">
+  <section id="thinking-turn" class="turn"><div class="bubble them muted">thinking...</div></section>
+</template>
+
+<template id="t-turn-error">
+  <section id="banner-turn" class="turn"><div class="bubble err">{{text}}</div></section>
+</template>
+
+<!-- ===== Footer ======================================================== -->
+
+<!-- Round 1: the starting question, answered with a mood. -->
+<template id="t-footer-moods">
+  <p class="hint">Choose how you are doing. That counts as your turn.</p>
+  <div class="chips">{{{moods}}}</div>
+  <div class="bar">
+    {{{summary}}}
+  </div>
+  {{{info}}}
+</template>
+
+<template id="t-mood">
+  <button type="button" id="{{id}}" class="chip" data-m="{{mood}}" {{disabled}}>{{label}}</button>
+</template>
+
+<!-- Round 2 on: type an answer, or pass. Keep the textarea on one line with
+     nothing between its tags, or that becomes text in the box. -->
+<template id="t-footer-contribute">
+  <textarea id="answer" rows="2" maxlength="{{max}}" placeholder="Type here..." aria-label="Message to the group" {{disabled}}>{{draft}}</textarea>
+  <div class="bar">
+    <button type="button" id="pass" class="link" {{disabled}}>Pass this round</button>
+    {{{summary}}}
+    <span class="end"><button type="button" id="send" class="primary" {{disabled}}>Send</button></span>
+  </div>
+  {{{info}}}
+</template>
+
+<!-- You have answered, or the duck is thinking. -->
+<template id="t-footer-waiting">
+  <div class="bar">
+    {{{summary}}}
+  </div>
+  {{{info}}}
+</template>
+
+<!-- The duck's reply failed. {{{retry}}} is empty once the session is capped. -->
+<template id="t-footer-failed">
+  <div class="bar">
+    {{{summary}}}
+    <span class="end">{{{retry}}}</span>
+  </div>
+  {{{info}}}
+</template>
+
+<!-- The connection stopped, and only the user can start it again. -->
+<template id="t-footer-halted">
+  <div class="bar">
+    {{{summary}}}
+    <span class="end">{{{reconnect}}}</span>
+  </div>
+  {{{info}}}
+</template>
+
+<template id="t-footer-reconnecting">
+  <div class="bar">
+    {{{summary}}}
+    <span class="end muted tiny">Reconnecting...</span>
+  </div>
+  {{{info}}}
+</template>
+
+<!-- In every footer. Switched off until the duck has said something. -->
+<template id="t-btn-summary">
+  <button type="button" id="summary" class="link" {{disabled}}>Update summary</button>
+</template>
+
+<template id="t-btn-retry">
+  <button type="button" id="retry" class="primary">Retry</button>
+</template>
+
+<template id="t-btn-reconnect">
+  <button type="button" id="reconnect" class="primary">Reconnect</button>
+</template>
+
+<template id="t-info">
+  <p class="info">{{text}}</p>
+</template>
+
+<!-- ===== Connecting screen ============================================= -->
+
+<template id="t-connecting">
+  <div class="screen">
+    {{{header}}}
+    <div class="idle" role="status" aria-live="polite">
+      <div class="idle-line">{{line}}</div>
+      {{{detail}}}
+      {{{error}}}
+      {{{action}}}
+    </div>
+  </div>
+</template>
+
+<template id="t-connecting-detail">
+  <div class="muted tiny">Everyone with this FigJam file open joins the same round.</div>
+</template>
+
+<template id="t-error">
+  <div class="bubble err">{{text}}</div>
+</template>
+
+<!-- ===== Settings screen =============================================== -->
+
+<template id="t-settings">
+  <div class="screen">
+    {{{header}}}
+    <div class="body">
+      <div class="field">
+        <label class="caps muted" for="text-size">Text size</label>
+        <select id="text-size">{{{sizes}}}</select>
+        <p class="muted tiny">Saved on this device.</p>
+      </div>
+      <div class="field">
+        <span class="caps muted">Panel</span>
+        <div class="bar"><button type="button" id="reset-size">Reset panel size</button></div>
+        <p class="muted tiny">Drag the right or bottom edge to resize. If the panel ends up bigger than your Figma window, reset it here.</p>
+      </div>
+      <div class="field">
+        <span class="caps muted">Session</span>
+        <div class="bar">{{{session}}}</div>
+        <p class="muted tiny">Clears the chat and starts round 1 for everyone in this file.</p>
+        {{{error}}}
+      </div>
+    </div>
+  </div>
+</template>
+
+<!-- New session takes two taps, since it clears the chat for everyone. The
+     first swaps in the armed version for a few seconds. -->
+<template id="t-btn-new-session">
+  <button type="button" id="new-session" {{disabled}}>New session</button>
+</template>
+
+<template id="t-btn-new-session-armed">
+  <button type="button" id="new-session" class="danger" {{disabled}}>Tap again to clear it for everyone</button>
+</template>
+
+<template id="t-size-option">
+  <option value="{{px}}" {{selected}}>{{px}}px</option>
+</template>
+
+<!-- ===== Collapsed ===================================================== -->
+
+<!-- The whole 70x70 window. {{turn}} is turn while the round waits on this
+     user, which is what makes the duck bob. -->
+<template id="t-collapsed">
+  <button type="button" class="collapsed {{turn}}" id="collapsed" title="{{label}}" aria-label="{{label}}">{{{duck}}}</button>
+</template>
+
+<!-- The duck's head. {{fid}} is unique per copy, so two on one page never
+     share a filter. -->
+<template id="t-duck-head">
+  <svg width="{{size}}" height="{{size}}" viewBox="18 4 64 64" aria-hidden="true">
+    <defs>
+      <filter id="{{fid}}" x="-25%" y="-25%" width="150%" height="150%">
+        <feTurbulence type="fractalNoise" baseFrequency="0.045" numOctaves="2" seed="4" result="n"/>
+        <feDisplacementMap in="SourceGraphic" in2="n" scale="3"/>
+      </filter>
+    </defs>
+    <g filter="url(#{{fid}})" stroke="#C98A1F" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="50" cy="36" r="27" fill="#FFDD70"/>
+      <ellipse cx="49" cy="55" rx="13" ry="7" fill="#FF9F40"/>
+      <path d="M37 55 Q49 60 61 55" stroke="#C97116" stroke-width="2" fill="none"/>
+      <circle cx="40" cy="28" r="3.4" fill="#33261A" stroke="none"/>
+      <circle cx="60" cy="28" r="3.4" fill="#33261A" stroke="none"/>
+      <circle cx="41.2" cy="26.6" r="1" fill="#ffffff" stroke="none"/>
+      <circle cx="61.2" cy="26.6" r="1" fill="#ffffff" stroke="none"/>
+      <ellipse cx="31" cy="40" rx="6.5" ry="4.3" fill="#FFAFA0" stroke="none" opacity="0.6"/>
+      <ellipse cx="69" cy="40" rx="6.5" ry="4.3" fill="#FFAFA0" stroke="none" opacity="0.6"/>
+    </g>
+  </svg>
+</template>
 </body>
 </html>

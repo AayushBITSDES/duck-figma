@@ -49,6 +49,7 @@ type StoredParticipant = {
 };
 
 type RoomRecord = {
+  session: string;
   round: RoundState;
   participants: Record<string, StoredParticipant>;
   messages: ChatMessage[];
@@ -58,6 +59,7 @@ type RoomRecord = {
 
 function emptyRecord(): RoomRecord {
   return {
+    session: crypto.randomUUID(),
     round: { id: 1, status: 'collecting' },
     participants: {},
     messages: [],
@@ -70,6 +72,9 @@ export class Room extends DurableObject<Env> {
   private record: RoomRecord;
   private facilitating = false;
   private wipeGeneration = 0;
+  // When each participant was last nudged. In memory only: losing it to an
+  // eviction just lets one early nudge through.
+  private nudgedAt = new Map<string, number>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -77,6 +82,11 @@ export class Room extends DurableObject<Env> {
     this.ctx.blockConcurrencyWhile(async () => {
       this.ensureTable();
       this.record = this.loadRecord();
+      // A room saved before sessions had names gets one, kept from here on.
+      if (!this.record.session) {
+        this.record.session = crypto.randomUUID();
+        this.saveRecord();
+      }
       if (this.record.round.status === 'thinking') {
         this.record.round.status = 'failed';
         this.saveRecord();
@@ -140,6 +150,18 @@ export class Room extends DurableObject<Env> {
       await this.handleRetry(ws, msg.roundId);
       return;
     }
+    if (msg.type === 'nudge') {
+      this.handleNudge(ws, msg.roundId);
+      return;
+    }
+    if (msg.type === 'close-round') {
+      await this.handleCloseRound(ws, msg.roundId);
+      return;
+    }
+    if (msg.type === 'reset') {
+      this.handleReset(ws);
+      return;
+    }
     await this.handleAct(ws, msg);
   }
 
@@ -164,8 +186,25 @@ export class Room extends DurableObject<Env> {
     }
   }
 
+  // A room has one alarm, and two things use it: the wipe after everyone
+  // leaves, and a close-round countdown. Whichever fired, a due countdown is
+  // settled first, and one still running is armed again.
   async alarm(): Promise<void> {
-    if (this.ctx.getWebSockets().length > 0) return;
+    const occupied = this.ctx.getWebSockets().length > 0;
+    await this.closeDueRound();
+    if (this.ctx.getWebSockets().length > 0) {
+      const closesAt = this.record.round.closesAt;
+      if (closesAt && this.record.round.status === 'collecting') await this.ctx.storage.setAlarm(closesAt);
+      return;
+    }
+    // Settling a countdown can wait seconds on the facilitator, and the last
+    // person can leave in that time. The wipe is for a room that has been
+    // empty for the whole reconnect window, not one that just emptied, so it
+    // is put off by that window, counted from now.
+    if (occupied) {
+      await this.ctx.storage.setAlarm(Date.now() + SESSION_LIMITS.reconnectWindowMs);
+      return;
+    }
     const generation = this.wipeGeneration;
     await this.ctx.storage.deleteAll();
     // deleteAll yields. A reconnect can land in that gap, write the room
@@ -233,12 +272,18 @@ export class Room extends DurableObject<Env> {
     this.send(ws, {
       type: 'snapshot',
       roomId: this.roomId(),
+      session: this.record.session,
       you: { clientId: msg.clientId },
       participants: this.connectedParticipants(),
       messages: this.record.messages,
       round: this.record.round,
     });
     this.broadcast({ type: 'presence', participants: this.connectedParticipants() });
+    // The last disconnect re-aimed the alarm at the wipe. A countdown that was
+    // running when everyone left needs it back, or it would show on every
+    // panel and never close anything.
+    const closesAt = this.record.round.closesAt;
+    if (closesAt) await this.ctx.storage.setAlarm(Math.max(Date.now(), closesAt));
     await this.maybeFacilitate();
   }
 
@@ -352,9 +397,119 @@ export class Room extends DurableObject<Env> {
       return;
     }
     this.record.round.status = 'thinking';
+    // Everyone got in before the countdown ran out; it has nothing to close.
+    delete this.record.round.closesAt;
     this.saveRecord();
     this.broadcast({ type: 'round', round: this.record.round });
     await this.runFacilitator();
+  }
+
+  // Only someone who has already acted can nudge or close: a nudge from a
+  // holdout means nothing, and closing from one would skip themselves.
+  private actedThisRound(ws: WebSocket, roundId: number, verb: string): boolean {
+    if (roundId !== this.record.round.id) {
+      this.sendError(ws, 'stale_round', 'That round has already moved on.');
+      return false;
+    }
+    if (this.record.round.status !== 'collecting') {
+      this.sendError(ws, 'round_locked', 'This round is locked.');
+      return false;
+    }
+    const clientId = this.attachment(ws).clientId;
+    const stored = clientId ? this.record.participants[clientId] : undefined;
+    if (!stored || stored.status === 'pending') {
+      this.sendError(ws, 'round_locked', 'Answer or pass before you ' + verb + '.');
+      return false;
+    }
+    return true;
+  }
+
+  private handleNudge(ws: WebSocket, roundId: number): void {
+    if (!this.actedThisRound(ws, roundId, 'nudge anyone')) return;
+    const att = this.attachment(ws);
+    const by = att.displayName ?? 'Someone';
+    const now = Date.now();
+    for (const sock of this.ctx.getWebSockets()) {
+      const other = this.attachment(sock);
+      if (!other.joined || !other.clientId || other.clientId === att.clientId) continue;
+      const stored = this.record.participants[other.clientId];
+      if (stored && stored.status !== 'pending') continue;
+      // Per person, not per sender, so five people cannot nudge one holdout
+      // five times in a row.
+      if (now - (this.nudgedAt.get(other.clientId) ?? 0) < SESSION_LIMITS.nudgeCooldownMs) continue;
+      this.nudgedAt.set(other.clientId, now);
+      this.send(sock, { type: 'nudged', by });
+    }
+  }
+
+  private async handleCloseRound(ws: WebSocket, roundId: number): Promise<void> {
+    if (!this.actedThisRound(ws, roundId, 'close the round')) return;
+    const round = this.record.round;
+    if (round.closesAt) return;
+    if (!this.connectedParticipants().some((p) => p.status === 'pending')) return;
+    round.closesAt = Date.now() + SESSION_LIMITS.closeRoundDelayMs;
+    this.saveRecord();
+    this.broadcast({ type: 'round', round });
+    await this.ctx.storage.setAlarm(round.closesAt);
+  }
+
+  // Whoever is still pending when the countdown ends is marked passed, which
+  // is what maybeFacilitate waits on, so the round then runs exactly as if
+  // they had passed themselves.
+  private async closeDueRound(): Promise<void> {
+    const round = this.record.round;
+    if (!round.closesAt || round.status !== 'collecting' || Date.now() < round.closesAt) return;
+    delete round.closesAt;
+    const skipped: string[] = [];
+    for (const p of this.connectedParticipants()) {
+      if (p.status !== 'pending') continue;
+      this.record.participants[p.clientId] = { displayName: p.displayName, status: 'passed', text: '(did not answer)' };
+      skipped.push(p.displayName);
+    }
+    this.saveRecord();
+    if (skipped.length) {
+      const chat = this.makeMessage('system', FACILITATOR_AUTHOR.displayName, FACILITATOR_AUTHOR.clientId,
+        'Round closed without ' + skipped.join(', ') + '.');
+      this.pushMessage(chat);
+      this.saveRecord();
+      this.broadcast({ type: 'message', message: chat });
+      this.broadcast({ type: 'presence', participants: this.connectedParticipants() });
+    }
+    this.broadcast({ type: 'round', round });
+    await this.maybeFacilitate();
+  }
+
+  // A new session is the same room with the chat, the round and the roster
+  // cleared, so nobody reconnects: every panel just gets a fresh snapshot.
+  private handleReset(ws: WebSocket): void {
+    if (this.facilitating || this.record.round.status === 'thinking') {
+      this.sendError(ws, 'round_locked', 'The duck is replying. Start a new session once it has.');
+      return;
+    }
+    const att = this.attachment(ws);
+    const by = att.displayName ?? 'Someone';
+    // The facilitator spend window survives. Clearing it with the chat would
+    // let anyone reset their way past the per-room limit.
+    const openAiCalls = this.record.openAiCalls;
+    this.record = emptyRecord();
+    this.record.openAiCalls = openAiCalls;
+    this.nudgedAt.clear();
+    this.pushMessage(this.makeMessage('system', by, att.clientId ?? 'system', by + ' started a new session.'));
+    this.saveRecord();
+    const participants = this.connectedParticipants();
+    for (const sock of this.ctx.getWebSockets()) {
+      const other = this.attachment(sock);
+      if (!other.joined || !other.clientId) continue;
+      this.send(sock, {
+        type: 'snapshot',
+        roomId: this.roomId(),
+        session: this.record.session,
+        you: { clientId: other.clientId },
+        participants,
+        messages: this.record.messages,
+        round: this.record.round,
+      });
+    }
   }
 
   private async runFacilitator(): Promise<void> {
@@ -545,6 +700,7 @@ export class Room extends DurableObject<Env> {
       const parsed = JSON.parse(row.data) as RoomRecord;
       if (!parsed?.round || !parsed.participants || !Array.isArray(parsed.messages)) return emptyRecord();
       return {
+        session: typeof parsed.session === 'string' ? parsed.session : '',
         round: parsed.round,
         participants: parsed.participants,
         messages: parsed.messages,

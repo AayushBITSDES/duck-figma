@@ -108,6 +108,8 @@ function wire(opts) {
     getNodeByIdAsync: async (id) => stickies.filter((s) => s.id === id)[0] || null,
     createSticky: () => {
       const sticky = makeSticky('sticky-' + (stickies.length + 1));
+      // Where Figma puts one: the page in view at the moment of the call.
+      sticky.parent = figma.currentPage;
       stickies.push(sticky);
       return sticky;
     },

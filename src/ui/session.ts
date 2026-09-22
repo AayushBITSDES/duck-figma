@@ -7,7 +7,7 @@ import {
   ServerErrorCode,
   ServerMessage,
 } from '../shared/protocol';
-import { requestBoard } from './bridge';
+import { post, requestBoard } from './bridge';
 import { stripDashes } from './render';
 import { iHaveActed, state } from './state';
 
@@ -110,6 +110,7 @@ function openSocket(myGen: number) {
     return;
   }
   closeSocket();
+  socketHasSnapshot = false;
   state.ws = 'connecting';
   paint();
   let next: WebSocket;
@@ -186,6 +187,23 @@ function ingestMessage(message: ChatMessage): ChatMessage {
   };
 }
 
+// The name the Worker gave the session on screen. The thread cannot stand in
+// for it: after a long enough absence a reconnect snapshot shares no turns
+// with what is here (both sides keep only the last maxMessages), and a reset
+// during round 1 keeps the round number.
+let roomSession = '';
+// The Worker answers a join with one snapshot, and the only other time it
+// sends one is a reset. So a second snapshot on the same socket is a new
+// session whatever it carries, which also covers a Worker that predates
+// session names.
+let socketHasSnapshot = false;
+
+function isNewSession(snap: Extract<ServerMessage, { type: 'snapshot' }>): boolean {
+  if (socketHasSnapshot) return true;
+  if (snap.round.id < state.round.id) return true;
+  return !!(snap.session && roomSession && snap.session !== roomSession);
+}
+
 function applyFrame(raw: unknown) {
   let parsed: ServerMessage;
   try {
@@ -198,7 +216,17 @@ function applyFrame(raw: unknown) {
   if (parsed.type === 'pong') return;
 
   if (parsed.type === 'snapshot') {
+    if (state.gotSnapshot && isNewSession(parsed)) {
+      state.session += 1;
+      // The Worker forgets its nudge cooldowns on a reset, and a nudge from
+      // round 1 of the old session would otherwise show in round 1 of this one.
+      state.nudgedAt = 0;
+      state.nudgedBy = '';
+      state.nudgedRound = 0;
+    }
     state.gotSnapshot = true;
+    socketHasSnapshot = true;
+    if (parsed.session) roomSession = parsed.session;
     if (parsed.roomId) state.roomId = parsed.roomId;
     if (parsed.you && parsed.you.clientId) state.clientId = parsed.you.clientId;
     state.participants = parsed.participants || [];
@@ -237,6 +265,12 @@ function applyFrame(raw: unknown) {
     } else if (state.banner && state.banner.code === 'facilitator_failed') {
       state.banner = null;
     }
+  } else if (parsed.type === 'nudged') {
+    state.nudgedBy = parsed.by;
+    state.nudgedRound = state.round.id;
+    // A toast from the plugin reaches someone heads-down in the board, or
+    // with the panel collapsed, where nothing in the panel would.
+    post({ type: 'notify', text: parsed.by + ' is waiting on you in Duck Check-In.' });
   } else if (parsed.type === 'error') {
     if (parsed.code === 'already_acted') {
       state.actedRoundId = state.round.id;
@@ -400,6 +434,33 @@ export async function actPass(): Promise<boolean> {
     roundId: state.round.id,
     board: clippedBoard(),
   }));
+}
+
+export function actNudge() {
+  if (state.round.status !== 'collecting' || !iHaveActed()) return;
+  if (send({ type: 'nudge', roundId: state.round.id })) {
+    state.nudgedAt = Date.now();
+    // Brings the button back once the Worker would let another nudge through.
+    setTimeout(paint, SESSION_LIMITS.nudgeCooldownMs + 50);
+  } else {
+    markSendFailed();
+  }
+  paint();
+}
+
+export function actCloseRound() {
+  if (state.round.status !== 'collecting' || !iHaveActed() || state.round.closesAt) return;
+  if (!send({ type: 'close-round', roundId: state.round.id })) markSendFailed();
+  paint();
+}
+
+// The fresh snapshot the Worker sends everyone is what repaints; this only
+// reports whether the request left.
+export function actReset(): boolean {
+  if (send({ type: 'reset' })) return true;
+  markSendFailed();
+  paint();
+  return false;
 }
 
 export function actRetry() {

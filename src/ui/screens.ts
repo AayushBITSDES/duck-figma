@@ -1,8 +1,8 @@
 import { ChatMessage, Participant, SESSION_LIMITS } from '../shared/protocol';
 import { post, applyTextSize } from './bridge';
-import { duckSvg } from './duck';
-import { escapeHtml, render, renderCollapsed, renderMarkdown } from './render';
-import { actContribute, actPass, actRetry, actSetState, onPaint, reconnectSession } from './session';
+import { duckHeadSvg } from './duck';
+import { escapeHtml, render, renderCollapsed, renderMarkdown, tpl } from './render';
+import { actCloseRound, actContribute, actNudge, actPass, actReset, actRetry, actSetState, onPaint, reconnectSession } from './session';
 import { iHaveActed, lastFacilitatorText, moodLabel, MOODS, Mode, state } from './state';
 
 // The plugin has no window into which screen is up. Every screen goes through
@@ -13,34 +13,49 @@ function setMode(mode: Mode) {
   post({ type: 'mode', mode: mode });
 }
 
-export function header(sub: string) {
-  return (
-    '<header class="hdr">' + duckSvg(20) +
-    '<span class="hdr-title">Duck Check-In</span>' +
-    '<span id="hdr-sub" class="hdr-sub">' + escapeHtml(sub) + '</span>' +
-    minimizeButton() +
-    '</header>'
-  );
+function roundLabel(): string {
+  return 'Round ' + state.round.id;
+}
+
+// The round number recedes, what the round wants from you does not. The
+// plugin's own name is left out: at 280px the header has no width to spare.
+function sessionHeader(): string {
+  return tpl('t-session-header', {
+    lead: roundLabel(),
+    sub: subtitle(),
+    min: minimizeButton(),
+    menu: tpl('t-btn-menu'),
+    rail: presenceHtml(),
+  });
 }
 
 function textSizeOptions() {
   let out = '';
   for (let px = 9; px <= 18; px++) {
-    out += '<option value="' + px + '"' + (px === state.textSize ? ' selected' : '') + '>' + px + 'px</option>';
+    out += tpl('t-size-option', { px: px, selected: px === state.textSize ? 'selected' : '' });
   }
   return out;
 }
 
-export function minimizeButton() {
-  return '<button type="button" id="min" class="ghost mini" title="Collapse to the duck" aria-label="Collapse to the duck">-</button>';
+// Wired by delegation in ui.ts, so it works from whichever header draws it.
+function minimizeButton() {
+  return tpl('t-btn-min');
+}
+
+// The round is waiting on this user specifically: everyone else can be
+// pending without it being your move, so this is the only condition worth
+// spending the collapsed tile's one signal on.
+function needsYou(): boolean {
+  return state.ws === 'live' && state.round.status === 'collecting' && !iHaveActed();
 }
 
 export function showCollapsed() {
-  renderCollapsed(
-    '<button type="button" class="collapsed" id="collapsed" title="Open the duck" aria-label="Open the duck">' +
-    duckSvg(44) +
-    '</button>'
-  );
+  const turn = needsYou();
+  renderCollapsed(tpl('t-collapsed', {
+    turn: turn ? 'turn' : '',
+    label: turn ? 'Your turn. Open the duck' : 'Open the duck',
+    duck: duckHeadSvg(44),
+  }));
 }
 
 export function repaint() {
@@ -50,7 +65,24 @@ export function repaint() {
 }
 
 export function paintSession() {
-  if (state.mode === 'settings') return;
+  // render() swallows paints while collapsed, so the tile would keep whatever
+  // it was drawn with when the panel closed. It carries a signal that changes
+  // with the round, which makes it the one screen that has to repaint while
+  // minimized, whichever screen the panel was collapsed from.
+  if (state.minimized) {
+    syncClock();
+    return showCollapsed();
+  }
+  if (state.mode === 'settings') {
+    // Settings holds still under every frame, except that New session only
+    // works while connected, so it follows the connection.
+    if (canReset() !== paintedCanReset) {
+      const prev = captureFocus();
+      showSettings();
+      restoreFocus(prev);
+    }
+    return;
+  }
   if (state.gotSnapshot) showSession({ focus: state.mode === 'connecting' });
   else showConnecting();
 }
@@ -70,41 +102,60 @@ export function showConnecting() {
     : state.ws === 'reconnecting'
       ? 'Reconnecting to this board\'s session...'
       : 'Joining this board\'s session...';
-  render(
-    '<div class="screen">' +
-    '<div class="idle" role="status" aria-live="polite">' +
-    '<div class="idle-duck" aria-hidden="true">' + duckSvg(72) + '</div>' +
-    '<div>' + escapeHtml(line) + '</div>' +
-    (err ? '<div class="bubble err">' + escapeHtml(err) + '</div>' : '') +
-    (halted ? '<button type="button" id="reconnect" class="primary">Reconnect</button>' : '') +
-    '</div>' +
-    minimizeButton() +
-    '</div>'
-  );
+  const lead = halted ? 'Not connected' : state.ws === 'reconnecting' ? 'Reconnecting' : 'Joining';
+  // Halted means nothing is happening, so the rail stops running: a moving
+  // bar over "Not connected" would be the panel contradicting itself.
+  render(tpl('t-connecting', {
+    header: tpl('t-connecting-header', {
+      lead: lead,
+      min: minimizeButton(),
+      menu: tpl('t-btn-menu'),
+      rail: tpl(halted ? 't-rail-stopped' : 't-rail-loading'),
+    }),
+    line: line,
+    detail: halted ? '' : tpl('t-connecting-detail'),
+    error: err ? tpl('t-error', { text: err }) : '',
+    action: halted ? tpl('t-btn-reconnect') : '',
+  }));
   if (state.minimized) return;
   const reconnect = document.getElementById('reconnect');
   if (reconnect) reconnect.onclick = () => reconnectSession();
+  const settings = document.getElementById('settings');
+  if (settings) settings.onclick = openSettings;
+}
+
+// A new session clears the chat for everyone, so it takes a second tap within
+// this long. A confirm() dialog is not an option: Figma blocks them in plugins.
+const RESET_CONFIRM_MS = 4000;
+let resetArmedUntil = 0;
+// Set when the second tap could not send, so this screen says nothing was
+// cleared rather than leaving for a chat that is still the old one.
+let resetFailed = false;
+let paintedCanReset = false;
+
+function canReset(): boolean {
+  return state.ws === 'live' && state.gotSnapshot;
 }
 
 export function openSettings() {
+  resetFailed = false;
   showSettings();
 }
 
 export function showSettings() {
   setMode('settings');
-  render(
-    '<div class="screen">' + header('settings') +
-    '<div class="body">' +
-    '<div><label for="text-size">Text size</label>' +
-    '<select id="text-size">' + textSizeOptions() + '</select></div>' +
-    '<p class="muted tiny">Text size is saved on this device.</p>' +
-    '<div><button type="button" id="reset-size">Reset panel size</button></div>' +
-    '<p class="muted tiny">Drag the right or bottom edge to resize. If the panel ends up bigger than your Figma window, reset it here.</p>' +
-    '</div>' +
-    '<footer class="ftr">' +
-    '<button type="button" id="back" class="ghost">Back</button>' +
-    '</footer></div>'
-  );
+  // Back lives in the header, the way Figma's own sub-panels do it, so the
+  // screen needs no footer at all.
+  const armed = Date.now() < resetArmedUntil;
+  paintedCanReset = canReset();
+  render(tpl('t-settings', {
+    header: tpl('t-settings-header', { min: minimizeButton() }),
+    sizes: textSizeOptions(),
+    session: tpl(armed ? 't-btn-new-session-armed' : 't-btn-new-session', {
+      disabled: paintedCanReset ? '' : 'disabled',
+    }),
+    error: resetFailed ? tpl('t-error', { text: 'Not connected, so nothing was cleared. Try again once the panel reconnects.' }) : '',
+  }));
   if (state.minimized) return;
   const size = document.getElementById('text-size') as HTMLSelectElement | null;
   if (size) {
@@ -114,7 +165,30 @@ export function showSettings() {
       post({ type: 'text-size', size: px });
       showSettings();
     };
-    size.focus();
+    if (!armed) size.focus();
+  }
+  const fresh = document.getElementById('new-session');
+  if (fresh) {
+    fresh.onclick = () => {
+      if (Date.now() < resetArmedUntil) {
+        resetArmedUntil = 0;
+        resetFailed = !actReset();
+        if (resetFailed) showSettings();
+        else showSession({ focus: true });
+        return;
+      }
+      resetFailed = false;
+      resetArmedUntil = Date.now() + RESET_CONFIRM_MS;
+      showSettings();
+      // Quietly disarm if the second tap never comes.
+      setTimeout(() => {
+        if (state.mode === 'settings' && resetArmedUntil && Date.now() >= resetArmedUntil) {
+          resetArmedUntil = 0;
+          showSettings();
+        }
+      }, RESET_CONFIRM_MS + 50);
+    };
+    if (armed) fresh.focus();
   }
   const resetSize = document.getElementById('reset-size');
   if (resetSize) resetSize.onclick = () => post({ type: 'reset-size' });
@@ -127,18 +201,16 @@ export function showSettings() {
   }
 }
 
+// Says what the round wants, not who is in it: the rail below already carries
+// the roster.
 function subtitle(): string {
   if (state.ws === 'reconnecting') return 'reconnecting';
   if (state.ws !== 'live') return 'connecting';
-  if (state.round.status === 'thinking') return 'thinking...';
+  if (state.round.status === 'thinking') return 'thinking';
   if (state.round.status === 'failed') return 'retry';
-  const n = state.participants.length;
-  const pending = pendingOthers();
-  if (iHaveActed() && pending.length) {
-    const extra = pending.length > 1 ? ' +' + (pending.length - 1) : '';
-    return 'waiting on ' + pending[0].displayName + extra;
-  }
-  return n + ' here';
+  if (!iHaveActed()) return 'your turn';
+  const pending = pendingOthers().length;
+  return pending ? 'waiting on ' + pending : 'waiting';
 }
 
 function pendingOthers(): Participant[] {
@@ -150,42 +222,106 @@ function pendingOthers(): Participant[] {
   return out;
 }
 
+// One segment per person, colour carrying the whole vocabulary: brand for in,
+// border for still out, secondary for passed. The room caps a session at
+// eight, so the segments never get narrower than a few pixels. This replaces
+// the chips, which spelled every status as a comma-spliced sentence and
+// wrapped to three rows at five people. Which segment is yours lives in the
+// label, not in an outline: alone in a session, an outlined segment drew one
+// empty bordered bar that read as broken.
 function presenceInner(): string {
-  if (!state.participants.length) {
-    return '<span class="muted tiny">No one else is here yet.</span>';
-  }
-  let chips = '';
+  if (!state.participants.length) return tpl('t-rail-nobody');
+  let segs = '';
   for (let i = 0; i < state.participants.length; i++) {
     const p = state.participants[i];
     const mine = p.clientId === state.clientId;
     const status =
       p.status === 'contributed' ? 'contributed' :
-      p.status === 'passed' ? 'passed' : 'here';
-    const label = p.displayName + (mine ? ' (you)' : '');
-    chips +=
-      '<span class="chip' + (mine ? ' you' : '') + (p.status !== 'pending' ? ' done' : '') +
-      '" role="listitem">' + escapeHtml(label) + ', ' + status + '</span>';
+      p.status === 'passed' ? 'passed' : 'still to answer';
+    const tone = p.status === 'contributed' ? 'in' : p.status === 'passed' ? 'passed' : '';
+    const label = p.displayName + (mine ? ' (you)' : '') + ', ' + status;
+    segs += tpl('t-seg', { tone: tone, label: label });
   }
-  return chips;
+  return segs;
 }
 
 function presenceHtml(): string {
-  return '<div id="presence" class="presence" role="list" aria-label="Connected">' +
-    presenceInner() + '</div>';
+  return tpl('t-rail', { segments: presenceInner() });
 }
 
-function roundLine(): string {
-  if (state.ws === 'reconnecting') return 'Reconnecting. Your messages stay until a fresh snapshot arrives.';
-  if (state.round.status === 'thinking') return 'Everyone is in. The duck is thinking.';
-  if (state.round.status === 'failed') return 'The duck could not reply. Anyone can retry.';
-  if (iHaveActed()) {
-    const pending = pendingOthers();
-    if (!pending.length) return 'Waiting for the rest of the group.';
-    const names = pending.map((p) => p.displayName).join(', ');
-    return 'Waiting on ' + names + '.';
+function blocker(text: string, meta?: string): string {
+  return tpl('t-blocker', { text: text, meta: meta || '' });
+}
+
+function firstName(p: Participant): string {
+  return p.displayName.split(' ')[0] || p.displayName;
+}
+
+// Only speaks when something is holding the round up. "Your turn" and
+// "thinking" are already in the header.
+function roundInner(): string {
+  if (state.ws === 'reconnecting') return blocker('Reconnecting. Your messages stay until a fresh snapshot arrives.');
+  if (state.round.status === 'failed') return blocker('The duck could not reply. Anyone can retry.');
+  if (state.round.status !== 'collecting') return '';
+  const pending = pendingOthers();
+  const names = pending.map((p) => p.displayName).join(', ');
+  if (state.round.closesAt) {
+    return tpl('t-countdown', {
+      text: iHaveActed() ? 'Going on without ' + names : 'The round closes soon. Answer or pass.',
+    });
   }
-  if (state.round.id <= 1) return 'Choose how you are doing. That counts as your turn.';
-  return 'Add something for this round, or pass.';
+  // The one state where the strip is otherwise empty for this user, which is
+  // also where a nudge has to be impossible to miss.
+  if (!iHaveActed()) {
+    return state.nudgedBy && state.nudgedRound === state.round.id ? blocker(state.nudgedBy + ' is waiting on you.') : '';
+  }
+  if (!pending.length) return '';
+  let done = 0;
+  for (let i = 0; i < state.participants.length; i++) {
+    if (state.participants[i].status !== 'pending') done++;
+  }
+  const one = pending.length === 1;
+  const nudged = Date.now() - state.nudgedAt < SESSION_LIMITS.nudgeCooldownMs;
+  return tpl('t-blocker', {
+    text: 'Waiting on ' + names,
+    meta: done + ' of ' + state.participants.length + ' in',
+    actions: tpl('t-blocker-actions', {
+      nudge: nudged ? 'Nudged' : one ? 'Nudge ' + firstName(pending[0]) : 'Nudge ' + pending.length,
+      nudged: nudged ? 'disabled' : '',
+      close: one ? 'Go on without ' + firstName(pending[0]) : 'Go on without them',
+    }),
+  });
+}
+
+let clock: ReturnType<typeof setInterval> | null = null;
+
+// The countdown's seconds are written into #round-clock in place, never by
+// repainting #round, so the strip's live region is announced once and not
+// every second.
+function tickClock() {
+  const closesAt = state.round.closesAt;
+  if (!closesAt || state.round.status !== 'collecting') return syncClock();
+  const face = document.getElementById('round-clock');
+  if (face) face.innerHTML = Math.max(0, Math.ceil((closesAt - Date.now()) / 1000)) + 's';
+}
+
+function syncClock() {
+  const running = !!state.round.closesAt && state.round.status === 'collecting' && !state.minimized;
+  if (running && !clock) clock = setInterval(tickClock, 250);
+  if (!running && clock) {
+    clearInterval(clock);
+    clock = null;
+  }
+  if (running) tickClock();
+}
+
+// #round is rebuilt whenever what it says changes, so its buttons are wired
+// again each time, not once with the footer.
+function wireRound() {
+  const nudge = document.getElementById('nudge');
+  if (nudge) nudge.onclick = () => actNudge();
+  const close = document.getElementById('close-round');
+  if (close) close.onclick = () => actCloseRound();
 }
 
 function isMine(m: ChatMessage): boolean {
@@ -197,43 +333,19 @@ function turnHtml(m: ChatMessage): string {
   const name = (m.author && m.author.displayName) || 'Someone';
   const kind = m.kind;
   if (kind === 'facilitator') {
-    return (
-      '<div class="turn">' + duckSvg(16) +
-      '<div class="stack">' +
-      '<div class="who">' + escapeHtml(name || 'Duck') + '</div>' +
-      '<div class="bubble them">' + renderMarkdown(m.text) + '</div>' +
-      '</div></div>'
-    );
+    return tpl('t-turn-duck', { name: name || 'Duck', text: renderMarkdown(m.text) });
   }
+  // An event, not something anyone said: no bubble, and no name label above
+  // a line that already starts with the name.
   if (kind === 'pass' || kind === 'system') {
-    const text = kind === 'pass' ? name + ' passed' : m.text;
-    return (
-      '<div class="turn">' +
-      '<div class="stack">' +
-      '<div class="who">' + escapeHtml(name) + '</div>' +
-      '<div class="bubble them muted">' + escapeHtml(text) + '</div>' +
-      '</div></div>'
-    );
+    return tpl('t-turn-note', { text: kind === 'pass' ? (mine ? 'You' : name) + ' passed' : m.text });
   }
+  let text = m.text;
   if (kind === 'state') {
     const mood = m.mood ? moodLabel(m.mood) : '';
-    const text = m.text || (name + (mood ? ' is ' + mood + '.' : ' checked in.'));
-    return (
-      '<div class="turn' + (mine ? ' mine' : '') + '">' +
-      '<div class="stack">' +
-      '<div class="who">' + escapeHtml(mine ? 'You' : name) + '</div>' +
-      '<div class="bubble ' + (mine ? 'mine' : 'them') + '">' + escapeHtml(text) + '</div>' +
-      '</div></div>'
-    );
+    text = m.text || (name + (mood ? ' is ' + mood + '.' : ' checked in.'));
   }
-  // contribution
-  return (
-    '<div class="turn' + (mine ? ' mine' : '') + '">' +
-    '<div class="stack">' +
-    '<div class="who">' + escapeHtml(mine ? 'You' : name) + '</div>' +
-    '<div class="bubble ' + (mine ? 'mine' : 'them') + '">' + escapeHtml(m.text) + '</div>' +
-    '</div></div>'
-  );
+  return mine ? tpl('t-turn-mine', { text: text }) : tpl('t-turn-them', { name: name, text: text });
 }
 
 function threadHtml(): string {
@@ -251,13 +363,11 @@ function threadHtml(): string {
 }
 
 function thinkingTurnHtml(): string {
-  return '<section id="thinking-turn" class="turn">' + duckSvg(16) +
-    '<div class="bubble them muted">thinking...</div></section>';
+  return tpl('t-turn-thinking');
 }
 
 function bannerTurnHtml(text: string): string {
-  return '<section id="banner-turn" class="turn"><div class="bubble err">' +
-    escapeHtml(text) + '</div></section>';
+  return tpl('t-turn-error', { text: text });
 }
 
 type Composer = 'moods' | 'contribute' | 'waiting' | 'thinking' | 'failed' | 'offline';
@@ -272,10 +382,9 @@ function composerKind(): Composer {
 }
 
 function moodButtons(): string {
-  const disabled = state.busy ? ' disabled' : '';
+  const disabled = state.busy ? 'disabled' : '';
   return MOODS.map((m) =>
-    '<button type="button" id="' + m.buttonId + '" data-m="' + m.id + '"' + disabled + '>' +
-    escapeHtml(m.label) + '</button>'
+    tpl('t-mood', { id: m.buttonId, mood: m.id, label: m.label, disabled: disabled })
   ).join('');
 }
 
@@ -283,48 +392,31 @@ function capLocked(): boolean {
   return !!(state.banner && (state.banner.code === 'session_cap' || state.banner.code === 'rate_limited'));
 }
 
+// One template per state of the turn, all sharing the summary link and the
+// info line. Which one shows is the only decision made here.
 function footerInner(kind: Composer): string {
-  const summaryText = lastFacilitatorText();
-  const summaryDisabled = summaryText ? '' : ' disabled';
-  const summary =
-    '<button type="button" id="summary" class="ghost"' + summaryDisabled + '>Update summary</button>';
-  const settings = '<button type="button" id="settings" class="ghost">Settings</button>';
-  const locked = state.busy ? ' disabled' : '';
   const info = state.banner && state.banner.kind === 'info' ? state.banner.text : '';
-  const infoHtml = info ? '<p class="muted tiny">' + escapeHtml(info) + '</p>' : '';
-  if (kind === 'moods') {
-    return moodButtons() + summary + settings + infoHtml;
-  }
+  const shared = {
+    summary: tpl('t-btn-summary', { disabled: lastFacilitatorText() ? '' : 'disabled' }),
+    info: info ? tpl('t-info', { text: info }) : '',
+  };
+  if (kind === 'moods') return tpl('t-footer-moods', { ...shared, moods: moodButtons() });
   if (kind === 'contribute') {
-    return (
-      '<textarea id="answer" rows="2" maxlength="' + SESSION_LIMITS.maxTextLength +
-      '" placeholder="Type here..." aria-label="Message to the group"' +
-      (state.busy ? ' disabled' : '') + '>' + escapeHtml(state.draft) + '</textarea>' +
-      '<div class="row">' +
-      '<button type="button" id="send" class="primary"' + locked + '>Send</button>' +
-      '<button type="button" id="pass" class="ghost"' + locked + '>Pass</button>' +
-      '</div>' +
-      summary + settings + infoHtml
-    );
+    return tpl('t-footer-contribute', {
+      ...shared,
+      max: SESSION_LIMITS.maxTextLength,
+      draft: state.draft,
+      disabled: state.busy ? 'disabled' : '',
+    });
   }
-  if (kind === 'failed') {
-    const retry = capLocked() ? '' : '<button type="button" id="retry" class="primary">Retry</button>';
-    return retry + summary + settings + infoHtml;
-  }
-  if (kind === 'waiting' || kind === 'thinking') {
-    return summary + settings + infoHtml;
-  }
+  if (kind === 'failed') return tpl('t-footer-failed', { ...shared, retry: capLocked() ? '' : tpl('t-btn-retry') });
+  if (kind === 'waiting' || kind === 'thinking') return tpl('t-footer-waiting', shared);
   // 'offline' covers both "the socket dropped and we are on it" and "we have
   // stopped trying and only the user can decide what happens next".
   if (state.banner && state.banner.action === 'reconnect') {
-    return '<button type="button" id="reconnect" class="primary">Reconnect</button>' +
-      summary + settings + infoHtml;
+    return tpl('t-footer-halted', { ...shared, reconnect: tpl('t-btn-reconnect') });
   }
-  return '<p class="muted tiny">Reconnecting...</p>' + summary + settings + infoHtml;
-}
-
-function footerHtml(kind: Composer): string {
-  return '<footer class="ftr" id="composer">' + footerInner(kind) + '</footer>';
+  return tpl('t-footer-reconnecting', shared);
 }
 
 // innerHTML rebuilds destroy the textarea; these remember caret/focus across
@@ -432,6 +524,14 @@ let paintedComposer: Composer | null = null;
 let paintedInfo = '';
 let paintedThinking = false;
 let paintedBanner = '';
+let paintedBusy = false;
+let paintedSummary = false;
+let shownSession = 0;
+// What the two live regions last said. They are rewritten only when that
+// changes: a screen reader can re-announce a region whenever its nodes are
+// replaced, and patchSession runs on every presence tick.
+let paintedStatus = '';
+let paintedRound = '';
 
 function sessionDomReady(): boolean {
   return !!(
@@ -475,6 +575,10 @@ function rememberPainted(kind: Composer) {
   paintedInfo = state.banner && state.banner.kind === 'info' ? state.banner.text : '';
   paintedThinking = state.round.status === 'thinking';
   paintedBanner = state.banner && state.banner.kind === 'error' ? state.banner.text : '';
+  paintedBusy = state.busy;
+  paintedSummary = !!lastFacilitatorText();
+  paintedStatus = roundLabel() + '|' + subtitle();
+  paintedRound = roundInner();
 }
 
 function stripTagged(html: string, id: string): string {
@@ -516,6 +620,19 @@ function appendNewTurns(thread: HTMLElement) {
   if (added) thread.innerHTML += added;
 }
 
+// The thread is only ever appended to. A new session takes every turn away,
+// and appending cannot, so without this the old chat would stay on screen
+// under a header saying round 1. Turns trimmed off the front at the message
+// cap land here too, which is also right.
+function threadShrank(): boolean {
+  const live: Record<string, true> = {};
+  for (let i = 0; i < state.messages.length; i++) live[state.messages[i].id] = true;
+  for (let i = 0; i < paintedMessageIds.length; i++) {
+    if (!live[paintedMessageIds[i]]) return true;
+  }
+  return false;
+}
+
 function patchSession(kind: Composer, focus?: boolean): boolean {
   const presence = document.getElementById('presence');
   const sub = document.getElementById('hdr-sub');
@@ -525,16 +642,39 @@ function patchSession(kind: Composer, focus?: boolean): boolean {
   if (!presence || !sub || !round || !thread || !composer) return false;
 
   presence.innerHTML = presenceInner();
-  sub.innerHTML = escapeHtml(subtitle());
-  round.innerHTML = escapeHtml(roundLine());
+  // The round number moves on without the composer changing kind, so it has
+  // to be patched here or the header keeps naming a round that is over.
+  const status = roundLabel() + '|' + subtitle();
+  if (status !== paintedStatus) {
+    const title = document.getElementById('hdr-title');
+    if (title) title.innerHTML = escapeHtml(roundLabel());
+    sub.innerHTML = escapeHtml(subtitle());
+    paintedStatus = status;
+  }
+  const strip = roundInner();
+  if (strip !== paintedRound) {
+    round.innerHTML = strip;
+    paintedRound = strip;
+    wireRound();
+  }
+  syncClock();
   appendNewTurns(thread);
   syncThreadExtras(thread);
 
   const info = state.banner && state.banner.kind === 'info' ? state.banner.text : '';
-  if (kind !== paintedComposer || info !== paintedInfo) {
+  // busy is in here because footerInner spells the disabled state into the
+  // markup: without it an action that leaves the composer on the same kind
+  // (every board wait) paints nothing, and a second click in that gap is
+  // dropped by withBoard with no sign it ever landed. The summary switch is
+  // here for the same reason: the first facilitator line can land without
+  // the composer changing kind, and the button has to turn on anyway.
+  const summary = !!lastFacilitatorText();
+  if (kind !== paintedComposer || info !== paintedInfo || state.busy !== paintedBusy || summary !== paintedSummary) {
     composer.innerHTML = footerInner(kind);
     paintedComposer = kind;
     paintedInfo = info;
+    paintedBusy = state.busy;
+    paintedSummary = summary;
     wireFooter(kind, !!focus);
   } else if (focus) {
     wireFooter(kind, true);
@@ -546,31 +686,33 @@ function patchSession(kind: Composer, focus?: boolean): boolean {
 
 function paintSessionScreen(kind: Composer, focus?: boolean) {
   const thinking = state.round.status === 'thinking';
-  render(
-    '<div class="screen">' +
-    header(subtitle()) +
-    presenceHtml() +
-    '<p id="round" class="round muted tiny" aria-live="polite">' + escapeHtml(roundLine()) + '</p>' +
-    '<main class="body" id="thread" role="log" aria-live="polite" aria-relevant="additions"' +
-    (thinking ? ' aria-busy="true"' : '') + '>' +
-    threadHtml() +
-    '</main>' +
-    footerHtml(kind) +
-    '</div>'
-  );
+  render(tpl('t-session', {
+    header: sessionHeader(),
+    round: roundInner(),
+    busy: thinking ? 'true' : 'false',
+    thread: threadHtml(),
+    composer: footerInner(kind),
+  }));
   rememberPainted(kind);
   if (state.minimized) return;
   const thread = document.getElementById('thread');
   if (thread) thread.scrollTop = thread.scrollHeight;
+  wireRound();
+  syncClock();
   wireFooter(kind, !!focus);
 }
 
 export function showSession(opts?: { focus?: boolean }) {
-  captureComposer();
+  // A half-typed answer belongs to the session it was typed in. It is
+  // dropped here rather than when the snapshot lands, because captureComposer
+  // would read it straight back out of the textarea still on screen.
+  if (state.session !== shownSession) state.draft = '';
+  else captureComposer();
+  shownSession = state.session;
   const prevFocus = captureFocus();
   const kind = composerKind();
   const focus = !!(opts && opts.focus);
-  const canPatch = state.mode === 'session' && !state.minimized && sessionDomReady();
+  const canPatch = state.mode === 'session' && !state.minimized && sessionDomReady() && !threadShrank();
 
   setMode('session');
   // render() swallows paints while collapsed. Do not bookkeep that as a
@@ -587,6 +729,10 @@ export function showSession(opts?: { focus?: boolean }) {
   paintedInfo = '';
   paintedThinking = false;
   paintedBanner = '';
+  paintedBusy = false;
+  paintedSummary = false;
+  paintedStatus = '';
+  paintedRound = '';
   paintSessionScreen(kind, focus);
   if (!focus) restoreFocus(prevFocus);
 }
