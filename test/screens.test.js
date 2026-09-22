@@ -41,6 +41,7 @@ function live(b, extra) {
   sock.incoming(Object.assign({
     type: 'snapshot',
     roomId: 'file:abc',
+    session: 's1',
     you: { clientId: 'client-1' },
     participants: [{ clientId: 'client-1', displayName: 'Ada', status: 'pending' }],
     messages: [],
@@ -416,8 +417,8 @@ module.exports = async function run() {
     [html().indexOf('An old answer') > -1, html().indexOf('Grace started a new session.') > -1], [false, true]);
   check('and drops the draft that belonged to the old session', fresh.state.draft, '');
 
-  // A reset during round 1 keeps the round number, so only the thread can
-  // tell it apart from a reconnect.
+  // A reset during round 1 keeps the round number, so only the session name
+  // tells it apart from a reconnect.
   const roundOneMsgs = [{ id: 'r1-a', at: 1, kind: 'contribution', author: { clientId: 'client-2', displayName: 'Grace' }, text: 'Round one answer' }];
   const again = boot();
   const againSock = live(again, { messages: roundOneMsgs, participants: [
@@ -427,7 +428,7 @@ module.exports = async function run() {
   againSock.incoming({ type: 'nudged', by: 'Grace' });
   again.state.draft = 'typed in the old round 1';
   const resetSnap = {
-    type: 'snapshot', roomId: 'file:abc', you: { clientId: 'client-1' },
+    type: 'snapshot', roomId: 'file:abc', session: 's2', you: { clientId: 'client-1' },
     participants: [{ clientId: 'client-1', displayName: 'Ada', status: 'pending' }, { clientId: 'client-2', displayName: 'Grace', status: 'pending' }],
     messages: [{ id: 'sys-2', at: 2, kind: 'system', author: { clientId: 'client-2', displayName: 'Grace' }, text: 'Grace started a new session.' }],
     round: { id: 1, status: 'collecting' },
@@ -441,11 +442,28 @@ module.exports = async function run() {
   const rejoinSock = live(rejoin, { messages: roundOneMsgs });
   rejoinSock.incoming({ type: 'nudged', by: 'Grace' });
   rejoinSock.incoming({
-    type: 'snapshot', roomId: 'file:abc', you: { clientId: 'client-1' },
+    type: 'snapshot', roomId: 'file:abc', session: 's1', you: { clientId: 'client-1' },
     participants: [{ clientId: 'client-1', displayName: 'Ada', status: 'pending' }],
     messages: roundOneMsgs, round: { id: 1, status: 'collecting' },
   });
   check('a reconnect snapshot of the same thread keeps the nudge', html().indexOf('Grace is waiting on you.') > -1, true);
+
+  // Away long enough that the capped thread shares no turns with the one on
+  // screen: still the same session, so the draft stays.
+  const away = boot();
+  const awaySock = live(away, { messages: roundOneMsgs });
+  away.state.draft = 'written before the laptop slept';
+  const missed = [];
+  for (let i = 0; i < 100; i++) {
+    missed.push({ id: 'later-' + i, at: 10 + i, kind: 'contribution', author: { clientId: 'client-2', displayName: 'Grace' }, text: 'Later ' + i });
+  }
+  awaySock.incoming({
+    type: 'snapshot', roomId: 'file:abc', session: 's1', you: { clientId: 'client-1' },
+    participants: [{ clientId: 'client-1', displayName: 'Ada', status: 'pending' }],
+    messages: missed, round: { id: 15, status: 'collecting' },
+  });
+  check('a long absence in the same session keeps the draft', [away.state.draft, el('answer').value],
+    ['written before the laptop slept', 'written before the laptop slept']);
 
   // --- A New session that could not send stays on settings and says so ----
   const unsent = boot();

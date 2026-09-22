@@ -3,7 +3,6 @@ import {
   ClientMessage,
   Mood,
   REPLACED_CLOSE_REASON,
-  RoundState,
   SESSION_LIMITS,
   ServerErrorCode,
   ServerMessage,
@@ -187,20 +186,16 @@ function ingestMessage(message: ChatMessage): ChatMessage {
   };
 }
 
-// A reconnect snapshot carries the thread this panel already has. A new
-// session does not: the round number goes backwards, or, for a reset during
-// round 1, which keeps the number, none of the turns on screen are in it. A
-// reset always opens its thread with a note saying who started it, so an
-// empty thread is never taken for one.
-function isNewSession(round: RoundState, incoming: ChatMessage[]): boolean {
-  if (round.id < state.round.id) return true;
-  if (!incoming.length || !state.messages.length) return false;
-  for (let i = 0; i < incoming.length; i++) {
-    for (let j = 0; j < state.messages.length; j++) {
-      if (incoming[i].id === state.messages[j].id) return false;
-    }
-  }
-  return true;
+// The name the Worker gave the session on screen. The thread cannot stand in
+// for it: after a long enough absence a reconnect snapshot shares no turns
+// with what is here (both sides keep only the last maxMessages), and a reset
+// during round 1 keeps the round number.
+let roomSession = '';
+
+function isNewSession(snap: Extract<ServerMessage, { type: 'snapshot' }>): boolean {
+  // A Worker older than session names still gives this much away.
+  if (snap.round.id < state.round.id) return true;
+  return !!(snap.session && roomSession && snap.session !== roomSession);
 }
 
 function applyFrame(raw: unknown) {
@@ -215,7 +210,7 @@ function applyFrame(raw: unknown) {
   if (parsed.type === 'pong') return;
 
   if (parsed.type === 'snapshot') {
-    if (state.gotSnapshot && isNewSession(parsed.round, parsed.messages || [])) {
+    if (state.gotSnapshot && isNewSession(parsed)) {
       state.session += 1;
       // The Worker forgets its nudge cooldowns on a reset, and a nudge from
       // round 1 of the old session would otherwise show in round 1 of this one.
@@ -224,6 +219,7 @@ function applyFrame(raw: unknown) {
       state.nudgedRound = 0;
     }
     state.gotSnapshot = true;
+    if (parsed.session) roomSession = parsed.session;
     if (parsed.roomId) state.roomId = parsed.roomId;
     if (parsed.you && parsed.you.clientId) state.clientId = parsed.you.clientId;
     state.participants = parsed.participants || [];

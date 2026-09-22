@@ -49,6 +49,7 @@ type StoredParticipant = {
 };
 
 type RoomRecord = {
+  session: string;
   round: RoundState;
   participants: Record<string, StoredParticipant>;
   messages: ChatMessage[];
@@ -58,6 +59,7 @@ type RoomRecord = {
 
 function emptyRecord(): RoomRecord {
   return {
+    session: crypto.randomUUID(),
     round: { id: 1, status: 'collecting' },
     participants: {},
     messages: [],
@@ -80,6 +82,11 @@ export class Room extends DurableObject<Env> {
     this.ctx.blockConcurrencyWhile(async () => {
       this.ensureTable();
       this.record = this.loadRecord();
+      // A room saved before sessions had names gets one, kept from here on.
+      if (!this.record.session) {
+        this.record.session = crypto.randomUUID();
+        this.saveRecord();
+      }
       if (this.record.round.status === 'thinking') {
         this.record.round.status = 'failed';
         this.saveRecord();
@@ -265,6 +272,7 @@ export class Room extends DurableObject<Env> {
     this.send(ws, {
       type: 'snapshot',
       roomId: this.roomId(),
+      session: this.record.session,
       you: { clientId: msg.clientId },
       participants: this.connectedParticipants(),
       messages: this.record.messages,
@@ -495,6 +503,7 @@ export class Room extends DurableObject<Env> {
       this.send(sock, {
         type: 'snapshot',
         roomId: this.roomId(),
+        session: this.record.session,
         you: { clientId: other.clientId },
         participants,
         messages: this.record.messages,
@@ -691,6 +700,7 @@ export class Room extends DurableObject<Env> {
       const parsed = JSON.parse(row.data) as RoomRecord;
       if (!parsed?.round || !parsed.participants || !Array.isArray(parsed.messages)) return emptyRecord();
       return {
+        session: typeof parsed.session === 'string' ? parsed.session : '',
         round: parsed.round,
         participants: parsed.participants,
         messages: parsed.messages,

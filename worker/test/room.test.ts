@@ -540,10 +540,15 @@ describe('new session', () => {
     alex.send({ type: 'contribute', roundId: 1, text: 'Old news.' });
     sam.send({ type: 'pass', roundId: 1 });
     await alex.untilMessageKind('facilitator');
+    const first = alex.log.find((m) => m.type === 'snapshot');
+    const before = first && first.type === 'snapshot' ? first.session : '';
+    expect(before).toMatch(/.{8,}/);
     alex.send({ type: 'reset' });
     for (const client of [alex, sam]) {
       const snap = await client.until('snapshot');
       if (snap.type !== 'snapshot') throw new Error('expected snapshot');
+      expect(snap.session).toMatch(/.{8,}/);
+      expect(snap.session).not.toBe(before);
       expect(snap.round).toEqual({ id: 1, status: 'collecting' });
       expect(snap.messages.map((m) => [m.kind, m.text])).toEqual([['system', 'Alex started a new session.']]);
       expect(snap.participants.map((p) => [p.displayName, p.status]).sort()).toEqual([['Alex', 'pending'], ['Sam', 'pending']]);
@@ -552,6 +557,12 @@ describe('new session', () => {
     sam.send({ type: 'pass', roundId: 1 });
     const passed = await alex.untilMessageKind('pass');
     expect(passed.author.displayName).toBe('Sam');
+
+    // Coming back to the same session is a reconnect, not a new one.
+    const reset = alex.log.filter((m) => m.type === 'snapshot').pop();
+    const back = await join(id, 'Alex', 'alex');
+    const again = back.log.find((m) => m.type === 'snapshot');
+    expect(again && again.type === 'snapshot' ? again.session : '').toBe(reset && reset.type === 'snapshot' ? reset.session : 'missing');
   });
 
   it('keeps the facilitator spend window, so a reset cannot clear the limit', async () => {

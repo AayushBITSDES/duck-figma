@@ -59,6 +59,10 @@ export type ServerMessage =
   | {
       type: 'snapshot';
       roomId: string;
+      // Changes only when the room starts over (a new session, or a wipe
+      // after everyone left), so a panel can tell that from a reconnect,
+      // however much it missed while away.
+      session: string;
       you: { clientId: string };
       participants: Participant[];
       messages: ChatMessage[];
