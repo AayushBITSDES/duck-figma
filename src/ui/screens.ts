@@ -18,8 +18,7 @@ function roundLabel(): string {
 }
 
 // The round number recedes, what the round wants from you does not. The
-// plugin's own name is not news to someone already looking at the panel, and
-// at 280px it was spending the width that the demand now uses.
+// plugin's own name is left out: at 280px the header has no width to spare.
 function sessionHeader(): string {
   return tpl('t-session-header', {
     lead: roundLabel(),
@@ -66,14 +65,23 @@ export function repaint() {
 }
 
 export function paintSession() {
-  if (state.mode === 'settings') return;
   // render() swallows paints while collapsed, so the tile would keep whatever
-  // it was drawn with when the panel closed. It now carries a signal that
-  // changes with the round, which makes it the one screen that has to repaint
-  // while minimized.
+  // it was drawn with when the panel closed. It carries a signal that changes
+  // with the round, which makes it the one screen that has to repaint while
+  // minimized, whichever screen the panel was collapsed from.
   if (state.minimized) {
     syncClock();
     return showCollapsed();
+  }
+  if (state.mode === 'settings') {
+    // Settings holds still under every frame, except that New session only
+    // works while connected, so it follows the connection.
+    if (canReset() !== paintedCanReset) {
+      const prev = captureFocus();
+      showSettings();
+      restoreFocus(prev);
+    }
+    return;
   }
   if (state.gotSnapshot) showSession({ focus: state.mode === 'connecting' });
   else showConnecting();
@@ -120,8 +128,17 @@ export function showConnecting() {
 // this long. A confirm() dialog is not an option: Figma blocks them in plugins.
 const RESET_CONFIRM_MS = 4000;
 let resetArmedUntil = 0;
+// Set when the second tap could not send, so this screen says nothing was
+// cleared rather than leaving for a chat that is still the old one.
+let resetFailed = false;
+let paintedCanReset = false;
+
+function canReset(): boolean {
+  return state.ws === 'live' && state.gotSnapshot;
+}
 
 export function openSettings() {
+  resetFailed = false;
   showSettings();
 }
 
@@ -130,12 +147,14 @@ export function showSettings() {
   // Back lives in the header, the way Figma's own sub-panels do it, so the
   // screen needs no footer at all.
   const armed = Date.now() < resetArmedUntil;
+  paintedCanReset = canReset();
   render(tpl('t-settings', {
     header: tpl('t-settings-header', { min: minimizeButton() }),
     sizes: textSizeOptions(),
     session: tpl(armed ? 't-btn-new-session-armed' : 't-btn-new-session', {
-      disabled: state.ws === 'live' && state.gotSnapshot ? '' : 'disabled',
+      disabled: paintedCanReset ? '' : 'disabled',
     }),
+    error: resetFailed ? tpl('t-error', { text: 'Not connected, so nothing was cleared. Try again once the panel reconnects.' }) : '',
   }));
   if (state.minimized) return;
   const size = document.getElementById('text-size') as HTMLSelectElement | null;
@@ -153,9 +172,12 @@ export function showSettings() {
     fresh.onclick = () => {
       if (Date.now() < resetArmedUntil) {
         resetArmedUntil = 0;
-        if (actReset()) showSession({ focus: true });
+        resetFailed = !actReset();
+        if (resetFailed) showSettings();
+        else showSession({ focus: true });
         return;
       }
+      resetFailed = false;
       resetArmedUntil = Date.now() + RESET_CONFIRM_MS;
       showSettings();
       // Quietly disarm if the second tap never comes.
@@ -180,8 +202,7 @@ export function showSettings() {
 }
 
 // Says what the round wants, not who is in it: the rail below already carries
-// the roster, and the old subtitle spent the header printing a name that the
-// round line printed again two rows down.
+// the roster.
 function subtitle(): string {
   if (state.ws === 'reconnecting') return 'reconnecting';
   if (state.ws !== 'live') return 'connecting';
@@ -237,8 +258,7 @@ function firstName(p: Participant): string {
 }
 
 // Only speaks when something is holding the round up. "Your turn" and
-// "thinking" are already in the header, and saying them again here is what
-// made the old round line read as filler.
+// "thinking" are already in the header.
 function roundInner(): string {
   if (state.ws === 'reconnecting') return blocker('Reconnecting. Your messages stay until a fresh snapshot arrives.');
   if (state.round.status === 'failed') return blocker('The duck could not reply. Anyone can retry.');
@@ -506,7 +526,7 @@ let paintedThinking = false;
 let paintedBanner = '';
 let paintedBusy = false;
 let paintedSummary = false;
-let shownRoundId = 0;
+let shownSession = 0;
 // What the two live regions last said. They are rewritten only when that
 // changes: a screen reader can re-announce a region whenever its nodes are
 // replaced, and patchSession runs on every presence tick.
@@ -647,8 +667,7 @@ function patchSession(kind: Composer, focus?: boolean): boolean {
   // (every board wait) paints nothing, and a second click in that gap is
   // dropped by withBoard with no sign it ever landed. The summary switch is
   // here for the same reason: the first facilitator line can land without
-  // the composer changing kind, and today only the Worker's habit of sending
-  // the next round frame straight after it was turning the button on.
+  // the composer changing kind, and the button has to turn on anyway.
   const summary = !!lastFacilitatorText();
   if (kind !== paintedComposer || info !== paintedInfo || state.busy !== paintedBusy || summary !== paintedSummary) {
     composer.innerHTML = footerInner(kind);
@@ -684,13 +703,12 @@ function paintSessionScreen(kind: Composer, focus?: boolean) {
 }
 
 export function showSession(opts?: { focus?: boolean }) {
-  // A round number going backwards is a new session, or a room wiped while
-  // everyone was away, and a half-typed answer belonged to the old one. It is
+  // A half-typed answer belongs to the session it was typed in. It is
   // dropped here rather than when the snapshot lands, because captureComposer
   // would read it straight back out of the textarea still on screen.
-  if (state.round.id < shownRoundId) state.draft = '';
+  if (state.session !== shownSession) state.draft = '';
   else captureComposer();
-  shownRoundId = state.round.id;
+  shownSession = state.session;
   const prevFocus = captureFocus();
   const kind = composerKind();
   const focus = !!(opts && opts.focus);

@@ -7,15 +7,11 @@
      because showUI passes themeColors. Everything here is built on those, so the
      panel tracks the editor's theme instead of guessing at it.
 
-     The one exception is the accent. FigJam's brand token is purple, and this
-     panel uses Figma's blue on purpose, so the accent is defined here, with
-     the light and dark values Figma itself uses, switched on the figma-dark
-     class Figma puts on <html>.
+     The one exception is the accent: FigJam's brand token is purple, and this
+     panel uses Figma's blue, with Figma's light and dark values.
 
-     Metrics come from the Rounds frames in the design file. They are written as
-     offsets from --duck-font rather than as pixels, so the whole panel scales
-     with the text size setting: at the default 11px the labels are 9px and the
-     secondary text 10px, exactly as drawn. */
+     Sizes are offsets from --duck-font rather than pixels, so the whole panel
+     scales with the text size setting. */
   :root {
     --accent: #0d99ff;
     --accent-hover: #007be5;
@@ -116,8 +112,7 @@
   .body { flex: 1 1 auto; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
 
   /* One row for the turn: the quiet actions on the left, the one that matters
-     on the right. Six identical full-width buttons needed 219px of a 380px
-     panel, which is why the thread used to have none left. */
+     on the right, so the footer leaves the thread its height. */
   .ftr {
     flex: 0 0 auto;
     display: flex; flex-direction: column; gap: 8px;
@@ -126,8 +121,8 @@
   }
   /* Wraps rather than shrinks. At the larger text sizes the row stops fitting
      280px, and a flex row that shrinks ellipsizes every label in it, Send
-     included, which is the text-size clipping bug a fourth time. Wrapping
-     drops Send to its own line instead, still pinned right. */
+     included. Wrapping drops Send to its own line instead, still pinned
+     right. */
   .bar { display: flex; align-items: center; flex-wrap: wrap; column-gap: 10px; row-gap: 6px; min-width: 0; }
   .bar > * { flex: none; }
   .bar > .end { margin-left: auto; }
@@ -586,6 +581,7 @@
         <span class="caps muted">Session</span>
         <div class="bar">{{{session}}}</div>
         <p class="muted tiny">Clears the chat and starts round 1 for everyone in this file.</p>
+        {{{error}}}
       </div>
     </div>
   </div>

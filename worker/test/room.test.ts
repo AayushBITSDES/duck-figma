@@ -640,6 +640,37 @@ describe('close round', () => {
     while (frame.type === 'round' && frame.round.id === 1) frame = await alex.until('round');
     expect(frame.type === 'round' && frame.round).toEqual({ id: 2, status: 'collecting' });
   });
+
+  it('keeps the room for the reconnect window when everyone leaves while the countdown facilitates', async () => {
+    const id = roomId('close-leave');
+    const alex = await join(id, 'Alex', 'alex');
+    const sam = await join(id, 'Sam', 'sam');
+    await alex.until('presence');
+    alex.send({ type: 'contribute', roundId: 1, text: 'SLOW_OPENAI keep this' });
+    await alex.untilMessageKind('contribution');
+    alex.send({ type: 'close-round', roundId: 1 });
+    await sam.until('round');
+
+    const stub = env.ROOM.getByName(id);
+    await runInDurableObject(stub, (instance) => {
+      const room = instance as unknown as { record: { round: { closesAt?: number } } };
+      room.record.round.closesAt = Date.now() - 1;
+    });
+    const alarm = runDurableObjectAlarm(stub);
+    // Both leave while the alarm is still waiting on the (slow) facilitator.
+    let frame = await sam.until('round');
+    while (frame.type === 'round' && frame.round.status !== 'thinking') frame = await sam.until('round');
+    alex.ws.close(1000, 'leaving');
+    sam.ws.close(1000, 'leaving');
+    await alarm;
+
+    const back = await join(id, 'Alex', 'alex-back');
+    const snap = back.log.find((m) => m.type === 'snapshot');
+    const texts = snap && snap.type === 'snapshot' ? snap.messages.map((m) => m.text) : [];
+    expect(texts).toContain('SLOW_OPENAI keep this');
+    expect(texts).toContain('Round closed without Sam.');
+    expect(texts).toContain('What is the real constraint on this board?');
+  });
 });
 
 describe('facilitator request', () => {

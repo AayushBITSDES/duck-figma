@@ -28,6 +28,10 @@ export const state = {
   displayName: '',
   ws: 'off' as SocketStatus,
   gotSnapshot: false,
+  // Bumped when a snapshot turns out to be a different session from the one
+  // on screen (a new session, or a room wiped while this panel was away), so
+  // anything kept for the old one can be dropped.
+  session: 0,
   participants: [] as Participant[],
   messages: [] as ChatMessage[],
   round: { id: 1, status: 'collecting' } as RoundState,

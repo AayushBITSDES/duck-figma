@@ -3,6 +3,7 @@ import {
   ClientMessage,
   Mood,
   REPLACED_CLOSE_REASON,
+  RoundState,
   SESSION_LIMITS,
   ServerErrorCode,
   ServerMessage,
@@ -186,6 +187,22 @@ function ingestMessage(message: ChatMessage): ChatMessage {
   };
 }
 
+// A reconnect snapshot carries the thread this panel already has. A new
+// session does not: the round number goes backwards, or, for a reset during
+// round 1, which keeps the number, none of the turns on screen are in it. A
+// reset always opens its thread with a note saying who started it, so an
+// empty thread is never taken for one.
+function isNewSession(round: RoundState, incoming: ChatMessage[]): boolean {
+  if (round.id < state.round.id) return true;
+  if (!incoming.length || !state.messages.length) return false;
+  for (let i = 0; i < incoming.length; i++) {
+    for (let j = 0; j < state.messages.length; j++) {
+      if (incoming[i].id === state.messages[j].id) return false;
+    }
+  }
+  return true;
+}
+
 function applyFrame(raw: unknown) {
   let parsed: ServerMessage;
   try {
@@ -198,6 +215,14 @@ function applyFrame(raw: unknown) {
   if (parsed.type === 'pong') return;
 
   if (parsed.type === 'snapshot') {
+    if (state.gotSnapshot && isNewSession(parsed.round, parsed.messages || [])) {
+      state.session += 1;
+      // The Worker forgets its nudge cooldowns on a reset, and a nudge from
+      // round 1 of the old session would otherwise show in round 1 of this one.
+      state.nudgedAt = 0;
+      state.nudgedBy = '';
+      state.nudgedRound = 0;
+    }
     state.gotSnapshot = true;
     if (parsed.roomId) state.roomId = parsed.roomId;
     if (parsed.you && parsed.you.clientId) state.clientId = parsed.you.clientId;

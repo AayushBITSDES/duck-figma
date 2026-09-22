@@ -15,6 +15,7 @@ export default defineConfig({
           const url = new URL(request.url);
           if (url.hostname === 'api.openai.com') {
             const body = await request.text();
+            if (body.includes('SLOW_OPENAI')) await new Promise((resolve) => setTimeout(resolve, 500));
             if (body.includes('FAIL_OPENAI') && failOpenAiOnce) {
               failOpenAiOnce = false;
               return Response.json({ error: { message: 'rate limited' } }, { status: 429 });

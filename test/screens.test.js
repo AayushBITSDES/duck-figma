@@ -415,4 +415,73 @@ module.exports = async function run() {
   check('the fresh snapshot clears the old chat off the screen',
     [html().indexOf('An old answer') > -1, html().indexOf('Grace started a new session.') > -1], [false, true]);
   check('and drops the draft that belonged to the old session', fresh.state.draft, '');
+
+  // A reset during round 1 keeps the round number, so only the thread can
+  // tell it apart from a reconnect.
+  const roundOneMsgs = [{ id: 'r1-a', at: 1, kind: 'contribution', author: { clientId: 'client-2', displayName: 'Grace' }, text: 'Round one answer' }];
+  const again = boot();
+  const againSock = live(again, { messages: roundOneMsgs, participants: [
+    { clientId: 'client-1', displayName: 'Ada', status: 'pending' },
+    { clientId: 'client-2', displayName: 'Grace', status: 'contributed' },
+  ] });
+  againSock.incoming({ type: 'nudged', by: 'Grace' });
+  again.state.draft = 'typed in the old round 1';
+  const resetSnap = {
+    type: 'snapshot', roomId: 'file:abc', you: { clientId: 'client-1' },
+    participants: [{ clientId: 'client-1', displayName: 'Ada', status: 'pending' }, { clientId: 'client-2', displayName: 'Grace', status: 'pending' }],
+    messages: [{ id: 'sys-2', at: 2, kind: 'system', author: { clientId: 'client-2', displayName: 'Grace' }, text: 'Grace started a new session.' }],
+    round: { id: 1, status: 'collecting' },
+  };
+  againSock.incoming(resetSnap);
+  check('a new session started in round 1 drops the old nudge',
+    [html().indexOf('Grace is waiting on you.') > -1, again.state.nudgedBy], [false, '']);
+  check('and the draft typed for the old round 1', again.state.draft, '');
+
+  const rejoin = boot();
+  const rejoinSock = live(rejoin, { messages: roundOneMsgs });
+  rejoinSock.incoming({ type: 'nudged', by: 'Grace' });
+  rejoinSock.incoming({
+    type: 'snapshot', roomId: 'file:abc', you: { clientId: 'client-1' },
+    participants: [{ clientId: 'client-1', displayName: 'Ada', status: 'pending' }],
+    messages: roundOneMsgs, round: { id: 1, status: 'collecting' },
+  });
+  check('a reconnect snapshot of the same thread keeps the nudge', html().indexOf('Grace is waiting on you.') > -1, true);
+
+  // --- A New session that could not send stays on settings and says so ----
+  const unsent = boot();
+  const unsentSock = live(unsent);
+  unsent.openSettings();
+  el('new-session').onclick();
+  unsentSock.readyState = 3; // died without a close event reaching us yet
+  el('new-session').onclick();
+  check('a second tap that could not send stays on settings', unsent.state.mode, 'settings');
+  check('with the button back to New session, and the reason on screen',
+    [html().indexOf('>New session<') > -1, html().indexOf('nothing was cleared') > -1], [true, true]);
+
+  // --- Settings follows the connection ------------------------------------
+  const drop = boot();
+  const dropSock = live(drop);
+  drop.openSettings();
+  check('New session is on while connected', /id="new-session"[^>]*\sdisabled/.test(html()), false);
+  dropSock.close(1006, '');
+  check('and switches off when the connection drops, without leaving settings',
+    [drop.state.mode, /id="new-session"[^>]*\sdisabled/.test(html())], ['settings', true]);
+
+  // --- Collapsed from settings still tracks the turn ----------------------
+  const tucked = boot();
+  const tuckedSock = live(tucked, { round: { id: 2, status: 'collecting' }, participants: [
+    { clientId: 'client-1', displayName: 'Ada', status: 'contributed' },
+    { clientId: 'client-2', displayName: 'Grace', status: 'pending' },
+  ] });
+  tucked.openSettings();
+  tucked.deliver({ type: 'window', minimized: true });
+  check('collapsed from settings with nothing to do, the duck sits still', /class="collapsed\s*"/.test(html()), true);
+  tuckedSock.incoming({ type: 'round', round: { id: 3, status: 'collecting' } });
+  tuckedSock.incoming({ type: 'presence', participants: [
+    { clientId: 'client-1', displayName: 'Ada', status: 'pending' },
+    { clientId: 'client-2', displayName: 'Grace', status: 'pending' },
+  ] });
+  check('and bobs once the next round is waiting on you', /class="collapsed turn"/.test(html()), true);
+  tucked.deliver({ type: 'window', minimized: false });
+  check('expanding goes back to settings', tucked.state.mode, 'settings');
 };

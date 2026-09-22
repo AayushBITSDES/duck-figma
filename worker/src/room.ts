@@ -183,10 +183,19 @@ export class Room extends DurableObject<Env> {
   // leaves, and a close-round countdown. Whichever fired, a due countdown is
   // settled first, and one still running is armed again.
   async alarm(): Promise<void> {
+    const occupied = this.ctx.getWebSockets().length > 0;
     await this.closeDueRound();
     if (this.ctx.getWebSockets().length > 0) {
       const closesAt = this.record.round.closesAt;
       if (closesAt && this.record.round.status === 'collecting') await this.ctx.storage.setAlarm(closesAt);
+      return;
+    }
+    // Settling a countdown can wait seconds on the facilitator, and the last
+    // person can leave in that time. The wipe is for a room that has been
+    // empty for the whole reconnect window, not one that just emptied, so it
+    // is put off by that window, counted from now.
+    if (occupied) {
+      await this.ctx.storage.setAlarm(Date.now() + SESSION_LIMITS.reconnectWindowMs);
       return;
     }
     const generation = this.wipeGeneration;
