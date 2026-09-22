@@ -103,7 +103,7 @@ module.exports = async function run() {
   live(busy);
   el('mood-stuck').onclick();
   check('a mood click disables the moods while the board is being read',
-    /id="mood-frustrated" data-m="frustrated" disabled/.test(html()), true);
+    /id="mood-frustrated"[^>]*\sdisabled/.test(html()), true);
   busy.deliver({ type: 'board-context', board: ['a sticky'] });
   await Promise.resolve();
   await Promise.resolve();

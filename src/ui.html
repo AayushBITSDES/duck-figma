@@ -7,10 +7,10 @@
      because showUI passes themeColors. Everything here is built on those, so the
      panel tracks the editor's theme instead of guessing at it.
 
-     Metrics follow Figma's own panels, because this window sits eight pixels
-     from them: an 8px grid, 24px small controls and 28px default ones, 5px
-     radii, centred button labels, and hairline dividers instead of cards.
-     Anything that departs from that reads as a foreign app inside the editor. */
+     Metrics come from the Rounds frames in the design file. They are written as
+     offsets from --duck-font rather than as pixels, so the whole panel scales
+     with the text size setting: at the default 11px the labels are 9px and the
+     secondary text 10px, exactly as drawn. */
   * { box-sizing: border-box; }
   body {
     margin: 0;
@@ -23,115 +23,156 @@
   }
   #root { height: 100vh; }
   .screen { display: flex; flex-direction: column; height: 100%; }
-
-  /* The header carries the round and what the round wants from you, in the
-     editor's own label register: the round number recedes, the demand does
-     not. It replaces the old title-plus-status line, which spent the width on
-     the plugin's own name. */
-  .hdr {
-    flex: 0 0 auto;
-    display: flex; align-items: baseline; gap: 6px;
-    padding: 8px 8px 6px;
-  }
-  .hdr-title { font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--figma-color-text-secondary); }
-  .hdr-sub { font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
-  .hdr-dot { color: var(--figma-color-text-secondary); }
-
-  .body { flex: 1 1 auto; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
-  .ftr { flex: 0 0 auto; padding: 8px; display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--figma-color-border); }
-  .row { display: flex; gap: 6px; }
-  .row > * { flex: 1; min-width: 0; }
-  /* The utility row is not the turn: it sits at label size, borderless, and
-     never at the same weight as Send. Six identical full-width buttons were
-     eating 219px of a 380px panel, which is what left the thread with none. */
-  .row.util { gap: 2px; }
-  .row.util > button { flex: 0 0 auto; }
   .muted { color: var(--figma-color-text-secondary); }
   .tiny { font-size: calc(var(--duck-font, 11px) - 1px); }
-
-  /* One segment per participant, capped at six by the session itself. Colour
-     is the whole vocabulary: brand for in, border for still out, secondary
-     text for passed. It replaces the presence chips, the round line and the
-     header subtitle, which all printed the same fact in three places. */
-  .rail {
-    flex: 0 0 auto;
-    display: flex; gap: 4px;
-    padding: 0 8px 8px;
+  .caps {
+    font-size: calc(var(--duck-font, 11px) - 2px);
+    font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase;
   }
+  .fill { flex: 1 1 auto; }
+
+  /* The header carries the round, what the round wants from you, and the rail.
+     The round number recedes; the demand does not. */
+  .hdr {
+    flex: 0 0 auto;
+    display: flex; flex-direction: column; gap: 8px;
+    padding: 10px 10px 10px 12px;
+    border-bottom: 1px solid var(--figma-color-border);
+  }
+  .hdr-row { display: flex; align-items: center; gap: 5px; min-width: 0; }
+  .hdr-title { flex: none; color: var(--figma-color-text-secondary); white-space: nowrap; }
+  /* The glyph buttons never give up width. At the largest text size the row
+     overflows 280px, and it is the demand that truncates, not the controls. */
+  .hdr-row > button { flex: none; }
+  .hdr-dot { color: var(--figma-color-text-secondary); font-size: calc(var(--duck-font, 11px) - 2px); }
+  .hdr-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+
+  /* One segment per person, and colour is the whole vocabulary: brand for in,
+     border for still out, secondary for passed. The room caps a session at
+     eight, so a segment never gets narrower than a few pixels. It replaces the
+     presence chips, the round line and the header subtitle, which printed the
+     same fact in three places. */
+  .rail { display: flex; gap: 3px; min-height: 4px; }
   .seg {
     flex: 1 1 0; min-width: 0; height: 4px; border-radius: 2px;
     background: var(--figma-color-border);
   }
   .seg.in { background: var(--figma-color-bg-brand); }
   .seg.passed { background: var(--figma-color-text-secondary); }
-  .seg.you { box-shadow: 0 0 0 1px var(--figma-color-bg); outline: 1px solid var(--figma-color-text); outline-offset: 1px; }
-
-  /* The blocker bar only exists while someone is holding the round up. It is
-     the one place that can end the wait, so it keeps a border and sits above
-     the thread rather than inside it. */
-  .blocker {
-    flex: 0 0 auto;
-    display: flex; align-items: center; gap: 6px;
-    margin: 0 8px 8px; padding: 6px 8px;
-    border: 1px solid var(--figma-color-border);
-    border-radius: var(--r, 5px);
+  /* Joining has no roster to draw yet, so the rail runs instead. The text
+     under it already says what is happening, so reduced motion just holds it. */
+  .rail.loading { position: relative; overflow: hidden; border-radius: 2px; background: var(--figma-color-border); }
+  .rail.loading::after {
+    content: ''; position: absolute; top: 0; bottom: 0; left: -30%; width: 30%;
+    border-radius: 2px; background: var(--figma-color-bg-brand);
+    animation: run 1.4s ease-in-out infinite;
   }
-  .blocker-text { flex: 1 1 auto; min-width: 0; }
-  .blocker-clock { flex: 0 0 auto; font-variant-numeric: tabular-nums; color: var(--figma-color-text-secondary); }
+  @keyframes run { from { left: -30%; } to { left: 100%; } }
+  @media (prefers-reduced-motion: reduce) {
+    .rail.loading::after { animation: none; left: 0; width: 100%; opacity: 0.35; }
+  }
 
-  .round { flex: 0 0 auto; margin: 0; padding: 0 8px 8px; }
-  .stack { display: flex; flex-direction: column; gap: 2px; max-width: 82%; }
-  .turn.mine .stack { align-items: flex-end; }
-  .who { color: var(--figma-color-text-secondary); font-size: calc(var(--duck-font, 11px) - 1px); }
-  .stack .bubble { max-width: 100%; }
+  /* The status strip only exists while something is holding the round up:
+     someone yet to answer, a failed reply, a dropped socket. When there is
+     nothing to say it takes no space at all. */
+  #round:empty { display: none; }
+  .blocker {
+    display: flex; align-items: center; gap: 6px;
+    padding: 9px 12px 10px;
+    background: var(--figma-color-bg-secondary);
+    border-bottom: 1px solid var(--figma-color-border);
+  }
+  .blocker-text {
+    flex: 1 1 auto; min-width: 0; font-weight: 500;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .blocker-meta {
+    flex: 0 0 auto; font-variant-numeric: tabular-nums;
+    font-size: calc(var(--duck-font, 11px) - 1px);
+    color: var(--figma-color-text-secondary);
+  }
 
+  .body { flex: 1 1 auto; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+
+  /* One row for the turn: the quiet actions on the left, the one that matters
+     on the right. Six identical full-width buttons needed 219px of a 380px
+     panel, which is why the thread used to have none left. */
+  .ftr {
+    flex: 0 0 auto;
+    display: flex; flex-direction: column; gap: 8px;
+    padding: 9px 12px 11px;
+    border-top: 1px solid var(--figma-color-border);
+  }
+  /* Wraps rather than shrinks. At the larger text sizes the row stops fitting
+     280px, and a flex row that shrinks ellipsizes every label in it, Send
+     included, which is the text-size clipping bug a fourth time. Wrapping
+     drops Send to its own line instead, still pinned right. */
+  .bar { display: flex; align-items: center; flex-wrap: wrap; column-gap: 10px; row-gap: 6px; min-width: 0; }
+  .bar > * { flex: none; }
+  .bar > .end { margin-left: auto; }
+  .hint { margin: 0; font-size: calc(var(--duck-font, 11px) - 2px); color: var(--figma-color-text-secondary); }
+  .info { margin: 0; font-size: calc(var(--duck-font, 11px) - 1px); color: var(--figma-color-text-secondary); }
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; }
+
+  /* The bare element is the secondary button, so anything left unclassed still
+     reads as a control. No fixed height anywhere: a fixed box clipped its own
+     label once --duck-font passed about 14px, so the padding grows it instead. */
   button {
-    /* min-height, not height: a fixed box clipped its own label the moment
-       --duck-font went past about 14px, which is most of the range the
-       settings screen offers. The floor keeps the hit target comfortable at
-       the small end, and the padding lets it grow from there.
-       Centred, because a left-aligned label is the tell that this was not
-       built to sit next to Figma's own controls. */
-    font: inherit; min-height: 28px; padding: 4px 8px;
-    border-radius: 5px; border: 1px solid var(--figma-color-border);
+    font: inherit; font-size: calc(var(--duck-font, 11px) - 1px); font-weight: 500;
+    line-height: 1.45; padding: 5px 10px;
+    border-radius: 6px; border: 1px solid var(--figma-color-border);
     background: var(--figma-color-bg); color: var(--figma-color-text);
     cursor: pointer; text-align: center; white-space: nowrap;
     overflow: hidden; text-overflow: ellipsis;
   }
   button:hover { background: var(--figma-color-bg-secondary); }
-  button.primary { background: var(--figma-color-bg-brand); color: var(--figma-color-text-onbrand); border-color: transparent; }
+  button.primary {
+    font-size: var(--duck-font, 11px); padding: 6px 16px;
+    background: var(--figma-color-bg-brand); color: var(--figma-color-text-onbrand);
+    border-color: transparent;
+  }
   button.primary:hover { background: var(--figma-color-bg-brand-hover); }
   button.primary:active { background: var(--figma-color-bg-brand-pressed); }
-  button.ghost { border-color: transparent; color: var(--figma-color-text-secondary); background: none; }
-  button.ghost:hover { color: var(--figma-color-text); background: var(--figma-color-bg-secondary); }
-  /* Utilities sit at Figma's small control height and label colour, so the
-     eye sorts them below the turn without having to read them. */
-  button.small { min-height: 24px; padding: 3px 6px; font-size: calc(var(--duck-font, 11px) - 1px); }
-  button:disabled { opacity: 0.4; cursor: default; }
-  button:disabled:hover { background: var(--figma-color-bg); }
-  button.ghost:disabled:hover { background: none; }
-
-  /* Mood chips are the starting question's answers, not a permanent control
-     surface, so they wrap on the grid instead of stacking full-width. */
-  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
-  .chips > button { flex: 0 1 auto; }
+  /* Links are for the actions that are not the turn: pass, summary, back. */
+  button.link {
+    border: none; background: none; padding: 4px 0; font-weight: 400;
+    color: var(--figma-color-text-secondary);
+  }
+  button.link:hover { color: var(--figma-color-text); background: none; }
+  button.chip {
+    border-radius: 999px; padding: 3px 8px; font-weight: 400;
+    color: var(--figma-color-text-secondary);
+  }
+  button.chip:hover { color: var(--figma-color-text); }
+  /* Header glyphs stay at body size and never pick up the button chrome. */
+  button.icon {
+    border: none; background: none; padding: 0 4px; border-radius: 4px;
+    font-size: var(--duck-font, 11px); font-weight: 400; line-height: 16px;
+    color: var(--figma-color-text-secondary);
+  }
+  button.icon:hover { color: var(--figma-color-text); background: var(--figma-color-bg-secondary); }
+  /* No hover states on a dead control, whatever its variant draws. */
+  button:disabled { opacity: 0.4; cursor: default; pointer-events: none; }
 
   input, select, textarea {
-    font: inherit; width: 100%; padding: 5px 8px;
-    border-radius: 5px; border: 1px solid var(--figma-color-border);
+    font: inherit; width: 100%; padding: 7px 9px;
+    border-radius: 6px; border: 1px solid var(--figma-color-border);
     background: var(--figma-color-bg); color: var(--figma-color-text);
   }
-  input:focus, select:focus, textarea:focus {
-    outline: none;
-    border-color: var(--figma-color-border-selected);
-    box-shadow: inset 0 0 0 1px var(--figma-color-border-selected);
-  }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--figma-color-border-selected); }
   textarea { resize: none; }
-  label { display: block; margin-bottom: 4px; color: var(--figma-color-text-secondary); }
+  label { display: block; }
 
   .turn { display: flex; gap: 6px; align-items: flex-end; }
   .turn.mine { justify-content: flex-end; }
+  .stack { display: flex; flex-direction: column; gap: 2px; max-width: 82%; }
+  .turn.mine .stack { align-items: flex-end; }
+  .who { color: var(--figma-color-text-secondary); font-size: calc(var(--duck-font, 11px) - 1px); }
+  /* A pass or a system line is an event, not something anyone said, so it
+     gets no bubble and no name label repeating the name inside it. */
+  .note { color: var(--figma-color-text-secondary); font-size: calc(var(--duck-font, 11px) - 1px); }
   .bubble { border-radius: 8px; padding: 7px 9px; max-width: 82%; }
+  .stack .bubble { max-width: 100%; }
   .bubble.them { background: var(--figma-color-bg-secondary); }
   .bubble.mine { background: var(--figma-color-bg-brand); color: var(--figma-color-text-onbrand); }
   .bubble.err { border: 1px solid var(--figma-color-border-danger-strong); color: var(--figma-color-text-danger); }
@@ -146,42 +187,38 @@
   .bubble pre { margin: 0; overflow-x: auto; background: rgba(127, 127, 127, 0.16); border-radius: 6px; padding: 6px 8px; }
   .bubble pre code { background: none; padding: 0; }
 
-  /* Connecting: the duck is chrome, not a control. */
-  .idle { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; height: 100%; padding: 12px; text-align: center; }
-  .idle-duck { animation: bob 2.6s ease-in-out infinite; }
-  @keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
-  @media (prefers-reduced-motion: reduce) { .idle-duck { animation: none; } }
+  /* Connecting and not-connected: one centred line, and the one control that
+     can change it when there is one. */
+  .idle { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 12px; text-align: center; }
+  .idle-line { font-weight: 500; }
 
-  /* Collapsed: the whole 70x70 window is duck, and the whole thing is the
-     click target. 70 is figma.showUI's hard floor for width.
-     The duck is still by default and bobs only when the round is waiting on
-     this user: an always-bobbing duck said nothing, because a signal that is
-     always on is not a signal. */
+  /* Settings: labelled groups on the grid, not a form. */
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field > p { margin: 0; }
+
+  /* Collapsed: the whole 70x70 window is the duck's head, and the whole thing
+     is the click target. 70 is figma.showUI's hard floor for width.
+     It is still by default and bobs only while the round is waiting on this
+     user: an always-bobbing duck said nothing, because a signal that is always
+     on is not a signal. */
   .collapsed { display: flex; align-items: center; justify-content: center;
     height: 100vh; cursor: pointer; }
   .collapsed.turn { animation: bob 2.6s ease-in-out infinite; }
   .collapsed:hover { animation-play-state: paused; }
+  @keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
   /* Reduced motion removes the only cue the bob was carrying, so the tile
-     itself has to speak: brand fill behind a knocked-out duck. */
+     itself has to speak: brand fill behind the duck. */
   @media (prefers-reduced-motion: reduce) {
-    .collapsed.turn { animation: none; background: var(--figma-color-bg-brand); color: var(--figma-color-text-onbrand); }
+    .collapsed.turn { animation: none; background: var(--figma-color-bg-brand); }
   }
-  /* The general button rule would otherwise give this a border, min-height,
-     and ellipsis — all wrong for a 70x70 icon that is the whole window. */
+  /* The general button rule would otherwise give this a border, padding, and
+     ellipsis, all wrong for a 70x70 icon that is the whole window. */
   button.collapsed {
-    width: 100%; min-height: 0; padding: 0; border: none;
+    width: 100%; padding: 0; border: none; border-radius: 0;
     background: transparent; white-space: normal; overflow: visible;
     text-overflow: clip; color: inherit;
   }
-  button.collapsed:hover,
-  button.collapsed:disabled:hover { background: transparent; }
-
-  /* min-height on button would win over this height, so it is reset here.
-     This one is an icon, not a label: it should stay 18px at every text size. */
-  button.mini { position: absolute; top: 6px; right: 6px; height: 18px;
-    min-height: 0; width: 18px; padding: 0; text-align: center; line-height: 1;
-    opacity: 0.5; }
-  button.mini:hover { opacity: 1; }
+  button.collapsed:hover { background: transparent; }
 
   /* Figma gives a plugin window no resize handle of its own and fires no
      resize event, so the panel has to draw its own grips and ask the plugin
@@ -189,8 +226,8 @@
      Three of them: the corner drives both axes, the edges lock to one, so
      widening the panel doesn't drag its height along for the ride. */
   #grip-e, #grip-s, #grip { position: fixed; touch-action: none; }
-  /* 6px strips. The body's own padding is 8px and the minimize button sits
-     6px in from the right at 18px wide, so neither strip covers a control. */
+  /* 6px strips. The header's right padding is 10px and everything else sits
+     12px in, so neither strip covers a control. */
   #grip-e { top: 0; right: 0; width: 6px; height: 100vh; cursor: ew-resize; }
   #grip-s { left: 0; bottom: 0; height: 6px; width: 100vw; cursor: ns-resize; }
   /* Last so it wins the overlap at the corner where all three meet. */
