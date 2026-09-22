@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ChatMessage, ServerMessage } from '../../src/shared/protocol';
 import { REPLACED_CLOSE_REASON, SESSION_LIMITS } from '../../src/shared/protocol';
 import { GLOBAL_LIMITER_INSTANCE } from '../src/limiter';
-import { BOARD_SNAPSHOT_END, BOARD_SNAPSHOT_START, buildFacilitatorMessages } from '../src/openai';
+import { BOARD_SNAPSHOT_END, BOARD_SNAPSHOT_START, buildFacilitatorMessages, facilitatorRequestBody } from '../src/openai';
 import { clientId, joinClient, openSocket, roomId, TestClient } from './helpers';
 
 afterEach(async () => {
@@ -639,5 +639,17 @@ describe('close round', () => {
     let frame = next;
     while (frame.type === 'round' && frame.round.id === 1) frame = await alex.until('round');
     expect(frame.type === 'round' && frame.round).toEqual({ id: 2, status: 'collecting' });
+  });
+});
+
+describe('facilitator request', () => {
+  it('asks a reasoning model for low effort, with room for the thinking as well as the reply', () => {
+    const body = facilitatorRequestBody('gpt-5.6-luna', []);
+    expect(body.reasoning_effort).toBe('low');
+    expect(body.max_completion_tokens as number).toBeGreaterThanOrEqual(1000);
+  });
+
+  it('leaves reasoning_effort off for a model that would reject it', () => {
+    expect('reasoning_effort' in facilitatorRequestBody('gpt-4o-mini', [])).toBe(false);
   });
 });
