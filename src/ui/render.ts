@@ -28,6 +28,29 @@ export function escapeAttr(s: string) {
   return escapeHtml(s).replace(/"/g, '&quot;');
 }
 
+const templates: Record<string, string> = {};
+
+// The markup lives in <template> elements in ui.html, so it can be edited
+// without touching TypeScript. {{name}} is text, escaped for an attribute
+// since that is the stricter of the two places it can land. {{{name}}} is
+// markup this code already built, inserted as is. A bare {{name}} where an
+// attribute would go switches a boolean one: the parser keeps it as
+// {{name}}="", and the value ("disabled", "selected") replaces the whole
+// thing, or nothing does.
+export function tpl(id: string, vals?: Record<string, string | number>): string {
+  let src = templates[id];
+  if (src === undefined) {
+    const node = document.getElementById(id);
+    if (!node) return '';
+    src = templates[id] = node.innerHTML.trim();
+  }
+  return src.replace(/\{\{\{(\w+)\}\}\}|\{\{(\w+)\}\}(?:="")?/g, (_m, raw, text) => {
+    const v = vals ? vals[raw || text] : undefined;
+    const s = v === undefined || v === null ? '' : String(v);
+    return raw ? s : escapeAttr(s);
+  });
+}
+
 // A small markdown renderer for assistant bubbles, not a library: the model
 // reply is untrusted text going into innerHTML, so it is escaped FIRST with
 // escapeHtml above, and every transform below only ever rearranges the

@@ -73,4 +73,5 @@ both places and run `npm run verify`. They must match or Figma will block
 the WebSocket.
 
 The plugin never receives the OpenAI key. The Worker selects the model through
-its non-secret `OPENAI_MODEL` setting.
+its non-secret `OPENAI_MODEL` setting, currently `gpt-5.6-luna` at low
+reasoning effort.

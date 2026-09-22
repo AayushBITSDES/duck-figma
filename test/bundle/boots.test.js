@@ -122,10 +122,13 @@ function pluginFigma(store, posted, resizes, intervals) {
     },
     viewport: { center: { x: 0, y: 0 } },
     getNodeByIdAsync: async (id) => stickies.filter((s) => s.id === id)[0] || null,
-    createSticky: () => {
+    // A method so the new sticky can go where Figma puts one: the page in
+    // view at the moment of the call.
+    createSticky() {
       const sticky = {
         id: 'sticky-summary',
         type: 'STICKY',
+        parent: this.currentPage,
         name: '',
         x: 0,
         y: 0,
@@ -198,7 +201,8 @@ module.exports = async function run() {
     ok('paints the connecting session screen',
       /Joining this board/.test(ui.root.innerHTML),
       ui.root.innerHTML.slice(0, 220));
-    ok('connecting screen has the duck svg', ui.root.querySelector('svg') !== null);
+    ok('connecting screen runs the rail instead of a mascot',
+      ui.root.querySelector('.rail.loading') !== null && ui.root.querySelector('svg') === null);
   }
 
   console.log('\n[2] geometry handshake');
@@ -224,7 +228,8 @@ module.exports = async function run() {
     ok('collapsed view still shows a duck', ui.root.querySelector('svg') !== null);
 
     ui.deliver({ type: 'window', width: 280, height: 380, minimized: false, textSize: 11 });
-    ok('expanding repaints a real screen', ui.root.innerHTML.length > collapsed.length);
+    ok('expanding repaints a real screen',
+      ui.root.querySelector('#collapsed') === null && /Joining this board/.test(ui.root.innerHTML));
   }
 
   console.log('\n[4] fake-websocket session: identity, people, round, mood');

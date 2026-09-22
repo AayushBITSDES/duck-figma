@@ -1,8 +1,23 @@
 import { SESSION_LIMITS } from '../../src/shared/protocol';
 import { FACILITATOR_BRIEF } from './brief';
 
-const MAX_REPLY_TOKENS = 220;
-const DEFAULT_MODEL = 'gpt-4o-mini';
+const DEFAULT_MODEL = 'gpt-5.6-luna';
+// The reply is two to four sentences because the brief says so, not because
+// of this. On a reasoning model the thinking counts against the ceiling too,
+// and one sized for the reply alone (it was 220) comes back empty whenever
+// the model thinks for longer than that.
+const MAX_COMPLETION_TOKENS = 1500;
+// Low rather than the model's default medium: a short facilitation reply
+// gains little from more, and medium is slower and spends the ceiling.
+const REASONING_EFFORT = 'low';
+
+// Only reasoning models take reasoning_effort; gpt-4o-mini and its kind
+// reject the request outright, and OPENAI_MODEL can name either.
+export function facilitatorRequestBody(model: string, messages: unknown[]): Record<string, unknown> {
+  const body: Record<string, unknown> = { model, max_completion_tokens: MAX_COMPLETION_TOKENS, messages };
+  if (/^(gpt-5|o\d)/.test(model)) body.reasoning_effort = REASONING_EFFORT;
+  return body;
+}
 const FENCE = /```[^\n]*\n[\s\S]*?```/g;
 
 export const BOARD_SNAPSHOT_START = '-----BEGIN BOARD SNAPSHOT-----';
@@ -58,11 +73,7 @@ export async function completeFacilitator(input: {
         Authorization: 'Bearer ' + input.apiKey,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        model,
-        max_completion_tokens: MAX_REPLY_TOKENS,
-        messages: buildFacilitatorMessages(input),
-      }),
+      body: JSON.stringify(facilitatorRequestBody(model, buildFacilitatorMessages(input))),
       signal: controller.signal,
     });
     const data: unknown = await res.json().catch(() => null);

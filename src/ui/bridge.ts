@@ -62,11 +62,19 @@ window.onmessage = (event) => {
     else if (!state.minimized && was) repaint();
   }
   if (msg.type === 'summary-updated') {
-    state.banner = { kind: 'info', text: 'Summary updated on the board.' };
-    paintSession();
+    setBanner('info', 'Summary updated on the board.');
   }
   if (msg.type === 'summary-error') {
-    state.banner = { kind: 'error', text: msg.message || 'Could not update the summary.' };
-    paintSession();
+    setBanner('error', msg.message || 'Could not update the summary.');
   }
 };
+
+// There is one banner slot, and while a session is halted that slot carries
+// the only Reconnect control there is (screens.ts, footerInner). A summary
+// result replaces its text, never the way back to a connection: dropping the
+// action leaves the panel claiming it is reconnecting when nothing is.
+function setBanner(kind: 'error' | 'info', text: string) {
+  const action = state.banner && state.banner.action;
+  state.banner = action ? { kind, text, action } : { kind, text };
+  paintSession();
+}

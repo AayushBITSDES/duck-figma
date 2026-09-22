@@ -18,7 +18,21 @@
  * below), the same way a real DOM replace would, so scenarios do not need to
  * reset this between each other.
  */
+const fs = require('fs');
+const path = require('path');
+
 const els = {};
+
+// The markup lives in <template> elements in ui.html (see tpl in render.ts).
+// A real getElementById finds those whatever is painted into #root, so this
+// does too, reading them from the same file the build inlines.
+const templates = {};
+function loadTemplates() {
+  const src = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'ui.html'), 'utf8');
+  const re = /<template id="([^"]+)">([\s\S]*?)<\/template>/g;
+  let m;
+  while ((m = re.exec(src))) templates[m[1]] = m[2];
+}
 // The last HTML actually written to #root. Nothing has painted yet at
 // startup, so only 'root' itself (never part of its own content) resolves.
 let currentHtml = '';
@@ -31,6 +45,26 @@ function collectIds(html) {
   return out;
 }
 
+// The close tag that ends the element opened just before `from`, counting
+// nested elements of the same name. Taking the first close tag instead, as
+// this used to, cut an element holding its own <div>s short and left the
+// rest of its old content behind.
+function matchingClose(html, tag, from) {
+  const re = new RegExp('<(/?)' + tag + '\\b[^>]*>', 'g');
+  re.lastIndex = from;
+  let depth = 1;
+  let m;
+  while ((m = re.exec(html))) {
+    if (m[1]) {
+      depth -= 1;
+      if (depth === 0) return m.index;
+    } else if (!/\/>$/.test(m[0])) {
+      depth += 1;
+    }
+  }
+  return -1;
+}
+
 function replaceIdInner(html, id, inner) {
   const needle = 'id="' + id + '"';
   const at = html.indexOf(needle);
@@ -38,10 +72,10 @@ function replaceIdInner(html, id, inner) {
   const open = html.lastIndexOf('<', at);
   const tagMatch = /^<([a-zA-Z0-9]+)/.exec(html.slice(open));
   if (!tagMatch || open < 0) return html;
-  const close = html.indexOf('</' + tagMatch[1] + '>', at);
-  if (close < 0) return html;
   const gt = html.indexOf('>', at);
-  if (gt < 0 || gt > close) return html;
+  if (gt < 0) return html;
+  const close = matchingClose(html, tagMatch[1], gt + 1);
+  if (close < 0) return html;
   return html.slice(0, gt + 1) + inner + html.slice(close);
 }
 
@@ -93,6 +127,7 @@ function rerender(html) {
 // anything: an id nothing painted does not resolve to an element, whether
 // or not this stub has been asked for it before.
 function getElementById(id) {
+  if (Object.prototype.hasOwnProperty.call(templates, id)) return { innerHTML: templates[id] };
   if (id !== 'root' && currentHtml.indexOf('id="' + id + '"') === -1) return null;
   return el(id);
 }
@@ -113,6 +148,7 @@ const posted = [];
 const windowListeners = [];
 
 function install() {
+  loadTemplates();
   currentHtml = '';
   for (const k of Object.keys(els)) delete els[k];
   bodyClasses.clear();

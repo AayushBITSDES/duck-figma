@@ -34,6 +34,17 @@ function html() {
   return dom.el('root').innerHTML;
 }
 
+// A real reconnect: the socket drops, the backoff timer opens a new one, and
+// the snapshot arrives on that. Sending a second snapshot down the same socket
+// is what a reset looks like instead.
+async function reconnect() {
+  ws.last().close(1006, '');
+  await new Promise((r) => setTimeout(r, 550));
+  const sock = ws.last();
+  sock.open();
+  return sock;
+}
+
 function live(b, extra) {
   b.deliver({ type: 'session', roomId: 'file:abc', clientId: 'client-1', displayName: 'Ada' });
   const sock = ws.last();
@@ -41,6 +52,7 @@ function live(b, extra) {
   sock.incoming(Object.assign({
     type: 'snapshot',
     roomId: 'file:abc',
+    session: 's1',
     you: { clientId: 'client-1' },
     participants: [{ clientId: 'client-1', displayName: 'Ada', status: 'pending' }],
     messages: [],
@@ -97,6 +109,36 @@ module.exports = async function run() {
   check('entering the session reports session',
     dom.posted.filter((m) => m.type === 'mode').pop(), { type: 'mode', mode: 'session' });
 
+  // The board request between a click and the socket send is a real wait, and
+  // withBoard drops anything clicked inside it. The composer has to say so.
+  const busy = boot();
+  live(busy);
+  el('mood-stuck').onclick();
+  check('a mood click disables the moods while the board is being read',
+    /id="mood-frustrated"[^>]*\sdisabled/.test(html()), true);
+  busy.deliver({ type: 'board-context', board: ['a sticky'] });
+  await Promise.resolve();
+  await Promise.resolve();
+  check('and the state reaches the room once it comes back',
+    ws.last().sent.filter((m) => m.type === 'set-state').length, 1);
+
+  // The header status is where "your turn" and "thinking" are said now, so it
+  // has to be the live region a screen reader listens to.
+  check('the round and its demand are one live region',
+    /class="hdr-status" aria-live="polite" aria-atomic="true">[\s\S]*?id="hdr-title"[\s\S]*?id="hdr-sub"/.test(html()), true);
+
+  // The first facilitator line can arrive with no change to the composer's
+  // kind. The summary link has to come on anyway, not wait for the next
+  // round frame to repaint it.
+  const spoke = boot();
+  const spokeSock = live(spoke, { round: { id: 2, status: 'collecting' } });
+  check('before the duck speaks, summary is off', /id="summary"[^>]*\sdisabled/.test(html()), true);
+  spokeSock.incoming({
+    type: 'message',
+    message: { id: 'f1', at: 5, kind: 'facilitator', author: { clientId: 'duck', displayName: 'Duck' }, text: 'What is in your way?' },
+  });
+  check('a facilitator line alone turns summary on', /id="summary"[^>]*\sdisabled/.test(html()), false);
+
   const later = boot();
   live(later, { round: { id: 2, status: 'collecting' } });
   const laterHtml = html();
@@ -125,6 +167,20 @@ module.exports = async function run() {
   check('and the composer still shows it', el('answer').value, 'half a thought');
   check('and restores the caret', [el('answer').selectionStart, el('answer').selectionEnd], [4, 7]);
   check('and still names the new arrival', html().indexOf('Grace') > -1, true);
+
+  // Names land inside the rail's aria-label, a double-quoted attribute. A "
+  // left raw there ends the attribute and lets a peer's display name add its
+  // own, so every template blank is escaped for an attribute.
+  ws.last().incoming({
+    type: 'presence',
+    participants: [
+      { clientId: 'client-1', displayName: 'Ada', status: 'pending' },
+      { clientId: 'client-3', displayName: 'x" onmouseover="alert(1)', status: 'pending' },
+    ],
+  });
+  check('a quote in a display name cannot open an attribute of its own',
+    [html().indexOf('" onmouseover="') === -1, html().indexOf('x&quot; onmouseover=&quot;alert(1)') > -1],
+    [true, true]);
   const thread = el('thread');
   check('presence does not rebuild the chat log node', el('thread') === thread, true);
 
@@ -227,7 +283,7 @@ module.exports = async function run() {
   const noFacilitator = boot();
   live(noFacilitator);
   check('with no facilitator turn the summary action is disabled',
-    html().indexOf('id="summary" class="ghost" disabled') > -1, true);
+    /id="summary"[^>]*\sdisabled/.test(html()), true);
   dom.posted.length = 0;
   el('summary').onclick();
   check('and clicking it posts nothing',
@@ -310,4 +366,162 @@ module.exports = async function run() {
     type: 'mode',
     mode: 'settings',
   });
+
+  // --- Someone holding the round up: nudge, and go on without them ---------
+  const holding = { round: { id: 2, status: 'collecting' }, participants: [
+    { clientId: 'client-1', displayName: 'Ada', status: 'contributed' },
+    { clientId: 'client-2', displayName: 'Grace Hopper', status: 'pending' },
+  ] };
+  const held = boot();
+  const heldSock = live(held, holding);
+  check('once you are in, the strip offers a nudge and a way on',
+    [html().indexOf('Waiting on Grace Hopper') > -1, html().indexOf('>Nudge Grace<') > -1, html().indexOf('>Go on without Grace<') > -1],
+    [true, true, true]);
+  el('nudge').onclick();
+  check('Nudge asks the room to nudge this round', heldSock.sent.filter((m) => m.type === 'nudge').pop(), { type: 'nudge', roundId: 2 });
+  check('and says it did, switched off for the cooldown', /id="nudge"[^>]*\sdisabled[^>]*>Nudged</.test(html()), true);
+  el('close-round').onclick();
+  check('Go on without asks the room to start the countdown',
+    heldSock.sent.filter((m) => m.type === 'close-round').pop(), { type: 'close-round', roundId: 2 });
+
+  heldSock.incoming({ type: 'round', round: { id: 2, status: 'collecting', closesAt: Date.now() + 20_000 } });
+  check('the countdown replaces the offer', [html().indexOf('Going on without Grace Hopper') > -1, html().indexOf('id="nudge"') > -1], [true, false]);
+  check('and its clock shows the seconds left', /^(19|20)s$/.test(el('round-clock').innerHTML), true);
+
+  const holdout = boot();
+  live(holdout, { round: { id: 2, status: 'collecting', closesAt: Date.now() + 20_000 }, participants: [
+    { clientId: 'client-1', displayName: 'Ada', status: 'pending' },
+    { clientId: 'client-2', displayName: 'Grace', status: 'contributed' },
+  ] });
+  check('the person being waited on is told the round is closing', html().indexOf('The round closes soon. Answer or pass.') > -1, true);
+
+  // --- Being nudged ---------------------------------------------------------
+  const poked = boot();
+  const pokedSock = live(poked, { round: { id: 2, status: 'collecting' } });
+  dom.posted.length = 0;
+  pokedSock.incoming({ type: 'nudged', by: 'Grace' });
+  check('a nudge says who is waiting, in the strip', /id="round"[\s\S]*Grace is waiting on you\./.test(html()), true);
+  check('and asks the plugin for a toast that reaches a collapsed panel',
+    dom.posted.filter((m) => m.type === 'notify').pop(), { type: 'notify', text: 'Grace is waiting on you in Duck Check-In.' });
+
+  // --- New session ----------------------------------------------------------
+  const fresh = boot();
+  const freshSock = live(fresh, {
+    round: { id: 3, status: 'collecting' },
+    messages: [{ id: 'old-1', at: 1, kind: 'contribution', author: { clientId: 'client-2', displayName: 'Grace' }, text: 'An old answer' }],
+  });
+  fresh.state.draft = 'half an old thought';
+  fresh.openSettings();
+  el('new-session').onclick();
+  check('one tap on New session only arms it',
+    [freshSock.sent.filter((m) => m.type === 'reset').length, html().indexOf('Tap again to clear it for everyone') > -1], [0, true]);
+  el('new-session').onclick();
+  check('the second tap asks the room for a new session', freshSock.sent.filter((m) => m.type === 'reset').length, 1);
+  check('and goes back to the chat', fresh.state.mode, 'session');
+  freshSock.incoming({
+    type: 'snapshot', roomId: 'file:abc', you: { clientId: 'client-1' },
+    participants: [{ clientId: 'client-1', displayName: 'Ada', status: 'pending' }],
+    messages: [{ id: 'sys-1', at: 2, kind: 'system', author: { clientId: 'client-2', displayName: 'Grace' }, text: 'Grace started a new session.' }],
+    round: { id: 1, status: 'collecting' },
+  });
+  check('the fresh snapshot clears the old chat off the screen',
+    [html().indexOf('An old answer') > -1, html().indexOf('Grace started a new session.') > -1], [false, true]);
+  check('and drops the draft that belonged to the old session', fresh.state.draft, '');
+
+  // A reset during round 1 keeps the round number, so only the session name
+  // tells it apart from a reconnect.
+  const roundOneMsgs = [{ id: 'r1-a', at: 1, kind: 'contribution', author: { clientId: 'client-2', displayName: 'Grace' }, text: 'Round one answer' }];
+  const again = boot();
+  const againSock = live(again, { messages: roundOneMsgs, participants: [
+    { clientId: 'client-1', displayName: 'Ada', status: 'pending' },
+    { clientId: 'client-2', displayName: 'Grace', status: 'contributed' },
+  ] });
+  againSock.incoming({ type: 'nudged', by: 'Grace' });
+  again.state.draft = 'typed in the old round 1';
+  const resetSnap = {
+    type: 'snapshot', roomId: 'file:abc', session: 's2', you: { clientId: 'client-1' },
+    participants: [{ clientId: 'client-1', displayName: 'Ada', status: 'pending' }, { clientId: 'client-2', displayName: 'Grace', status: 'pending' }],
+    messages: [{ id: 'sys-2', at: 2, kind: 'system', author: { clientId: 'client-2', displayName: 'Grace' }, text: 'Grace started a new session.' }],
+    round: { id: 1, status: 'collecting' },
+  };
+  againSock.incoming(resetSnap);
+  check('a new session started in round 1 drops the old nudge',
+    [html().indexOf('Grace is waiting on you.') > -1, again.state.nudgedBy], [false, '']);
+  check('and the draft typed for the old round 1', again.state.draft, '');
+
+  // A Worker from before session names sends none, and a round-1 reset keeps
+  // the round number. The second snapshot on one socket still gives it away.
+  const legacy = boot();
+  const legacySock = live(legacy, { session: undefined, messages: roundOneMsgs, participants: resetSnap.participants });
+  legacySock.incoming({ type: 'nudged', by: 'Grace' });
+  legacy.state.draft = 'typed before an old Worker reset';
+  legacySock.incoming(Object.assign({}, resetSnap, { session: undefined }));
+  check('a reset from a Worker without session names still drops the nudge and the draft',
+    [html().indexOf('Grace is waiting on you.') > -1, legacy.state.draft], [false, '']);
+
+  const rejoin = boot();
+  live(rejoin, { messages: roundOneMsgs }).incoming({ type: 'nudged', by: 'Grace' });
+  const rejoinSock = await reconnect();
+  rejoinSock.incoming({
+    type: 'snapshot', roomId: 'file:abc', session: 's1', you: { clientId: 'client-1' },
+    participants: [{ clientId: 'client-1', displayName: 'Ada', status: 'pending' }],
+    messages: roundOneMsgs, round: { id: 1, status: 'collecting' },
+  });
+  check('a reconnect snapshot of the same thread keeps the nudge', html().indexOf('Grace is waiting on you.') > -1, true);
+
+  // Away long enough that the capped thread shares no turns with the one on
+  // screen: still the same session, so the draft stays.
+  const away = boot();
+  live(away, { messages: roundOneMsgs });
+  away.state.draft = 'written before the laptop slept';
+  const awaySock = await reconnect();
+  const missed = [];
+  for (let i = 0; i < 100; i++) {
+    missed.push({ id: 'later-' + i, at: 10 + i, kind: 'contribution', author: { clientId: 'client-2', displayName: 'Grace' }, text: 'Later ' + i });
+  }
+  awaySock.incoming({
+    type: 'snapshot', roomId: 'file:abc', session: 's1', you: { clientId: 'client-1' },
+    participants: [{ clientId: 'client-1', displayName: 'Ada', status: 'pending' }],
+    messages: missed, round: { id: 15, status: 'collecting' },
+  });
+  check('a long absence in the same session keeps the draft', [away.state.draft, el('answer').value],
+    ['written before the laptop slept', 'written before the laptop slept']);
+
+  // --- A New session that could not send stays on settings and says so ----
+  const unsent = boot();
+  const unsentSock = live(unsent);
+  unsent.openSettings();
+  el('new-session').onclick();
+  unsentSock.readyState = 3; // died without a close event reaching us yet
+  el('new-session').onclick();
+  check('a second tap that could not send stays on settings', unsent.state.mode, 'settings');
+  check('with the button back to New session, and the reason on screen',
+    [html().indexOf('>New session<') > -1, html().indexOf('nothing was cleared') > -1], [true, true]);
+
+  // --- Settings follows the connection ------------------------------------
+  const drop = boot();
+  const dropSock = live(drop);
+  drop.openSettings();
+  check('New session is on while connected', /id="new-session"[^>]*\sdisabled/.test(html()), false);
+  dropSock.close(1006, '');
+  check('and switches off when the connection drops, without leaving settings',
+    [drop.state.mode, /id="new-session"[^>]*\sdisabled/.test(html())], ['settings', true]);
+
+  // --- Collapsed from settings still tracks the turn ----------------------
+  const tucked = boot();
+  const tuckedSock = live(tucked, { round: { id: 2, status: 'collecting' }, participants: [
+    { clientId: 'client-1', displayName: 'Ada', status: 'contributed' },
+    { clientId: 'client-2', displayName: 'Grace', status: 'pending' },
+  ] });
+  tucked.openSettings();
+  tucked.deliver({ type: 'window', minimized: true });
+  check('collapsed from settings with nothing to do, the duck sits still', /class="collapsed\s*"/.test(html()), true);
+  tuckedSock.incoming({ type: 'round', round: { id: 3, status: 'collecting' } });
+  tuckedSock.incoming({ type: 'presence', participants: [
+    { clientId: 'client-1', displayName: 'Ada', status: 'pending' },
+    { clientId: 'client-2', displayName: 'Grace', status: 'pending' },
+  ] });
+  check('and bobs once the next round is waiting on you', /class="collapsed turn"/.test(html()), true);
+  tucked.deliver({ type: 'window', minimized: false });
+  check('expanding goes back to settings', tucked.state.mode, 'settings');
 };
