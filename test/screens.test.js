@@ -240,7 +240,7 @@ module.exports = async function run() {
   const noFacilitator = boot();
   live(noFacilitator);
   check('with no facilitator turn the summary action is disabled',
-    html().indexOf('id="summary" class="ghost" disabled') > -1, true);
+    /id="summary"[^>]*\sdisabled/.test(html()), true);
   dom.posted.length = 0;
   el('summary').onclick();
   check('and clicking it posts nothing',

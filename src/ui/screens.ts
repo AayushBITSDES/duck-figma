@@ -1,6 +1,6 @@
 import { ChatMessage, Participant, SESSION_LIMITS } from '../shared/protocol';
 import { post, applyTextSize } from './bridge';
-import { duckSvg } from './duck';
+import { duckHeadSvg, duckSvg } from './duck';
 import { escapeHtml, render, renderCollapsed, renderMarkdown } from './render';
 import { actContribute, actPass, actRetry, actSetState, onPaint, reconnectSession } from './session';
 import { iHaveActed, lastFacilitatorText, moodLabel, MOODS, Mode, state } from './state';
@@ -40,10 +40,20 @@ export function minimizeButton() {
   return '<button type="button" id="min" class="ghost mini" title="Collapse to the duck" aria-label="Collapse to the duck">-</button>';
 }
 
+// The round is waiting on this user specifically: everyone else can be
+// pending without it being your move, so this is the only condition worth
+// spending the collapsed tile's one signal on.
+function needsYou(): boolean {
+  return state.ws === 'live' && state.round.status === 'collecting' && !iHaveActed();
+}
+
 export function showCollapsed() {
+  const turn = needsYou();
+  const label = turn ? 'Your turn. Open the duck' : 'Open the duck';
   renderCollapsed(
-    '<button type="button" class="collapsed" id="collapsed" title="Open the duck" aria-label="Open the duck">' +
-    duckSvg(44) +
+    '<button type="button" class="collapsed' + (turn ? ' turn' : '') +
+    '" id="collapsed" title="' + escapeHtml(label) + '" aria-label="' + escapeHtml(label) + '">' +
+    duckHeadSvg(44) +
     '</button>'
   );
 }
@@ -56,6 +66,11 @@ export function repaint() {
 
 export function paintSession() {
   if (state.mode === 'settings') return;
+  // render() swallows paints while collapsed, so the tile would keep whatever
+  // it was drawn with when the panel closed. It now carries a signal that
+  // changes with the round, which makes it the one screen that has to repaint
+  // while minimized.
+  if (state.minimized) return showCollapsed();
   if (state.gotSnapshot) showSession({ focus: state.mode === 'connecting' });
   else showConnecting();
 }
@@ -98,7 +113,7 @@ export function openSettings() {
 export function showSettings() {
   setMode('settings');
   render(
-    '<div class="screen">' + header('settings') +
+    '<div class="screen">' + header('', 'Settings') +
     '<div class="body">' +
     '<div><label for="text-size">Text size</label>' +
     '<select id="text-size">' + textSizeOptions() + '</select></div>' +
