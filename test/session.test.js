@@ -308,6 +308,22 @@ module.exports = async function run() {
   check('the Reconnect control opens a socket', ws.instances().length, beforeReplaced + 1);
   check('and clears the banner', b.state.banner, null);
 
+  // Update summary is right next to that Reconnect control and stays live
+  // while halted. Its result used to take the banner slot outright, taking
+  // the only way back with it and leaving the footer claiming to reconnect.
+  b = boot();
+  deliver(identity());
+  ws.last().open();
+  ws.last().incoming(snapshot());
+  ws.last().close(1000, 'replaced');
+  deliver({ type: 'summary-updated', nodeId: 's1' });
+  check('a summary result keeps the halted banner reachable',
+    b.state.banner && b.state.banner.action, 'reconnect');
+  check('and still says the summary landed', b.state.banner && b.state.banner.text,
+    'Summary updated on the board.');
+  check('so the footer still offers Reconnect',
+    dom.el('root').innerHTML.indexOf('id="reconnect"') > -1, true);
+
   // An ordinary drop still reconnects on its own: only the reason above is
   // special-cased.
   b = boot();

@@ -470,6 +470,43 @@ module.exports = async function run() {
     [sumEnv.pageData.duckSummaryNodeId, pageTwoData.duckSummaryNodeId],
     [sumEnv.stickies[0].id, undefined]);
 
+  // The same switch one await earlier, while the remembered id is being
+  // resolved. The fallback search used to run against whatever page was in
+  // view by then, so it adopted that page's summary and wrote this page's
+  // text into it.
+  ({ env: sumEnv, mod: summary } = loadPlugin('summary'));
+  const otherData = {};
+  const farSticky = makeSticky('far-summary');
+  const farPage = {
+    id: 'page-far',
+    type: 'PAGE',
+    selection: [],
+    getPluginData: (k) => otherData[k] || '',
+    setPluginData: (k, v) => { otherData[k] = String(v); },
+    findAll: (pred) => (typeof pred === 'function' ? [farSticky].filter(pred) : [farSticky]),
+  };
+  farSticky.parent = farPage;
+  farSticky.setPluginData('duckRole', 'session-summary');
+  farSticky.name = 'Session Summary';
+  farSticky.text.characters = 'Their summary';
+  const here = makeSticky('here-summary', { parent: sumEnv.figma.currentPage });
+  here.setPluginData('duckRole', 'session-summary');
+  here.name = 'Session Summary';
+  sumEnv.nodes.push(here);
+  sumEnv.nodeById[here.id] = here;
+  sumEnv.pageData.duckSummaryNodeId = here.id;
+  sumEnv.figma.getNodeByIdAsync = async (id) => {
+    sumEnv.figma.currentPage = farPage;
+    return sumEnv.nodeById[id] || null;
+  };
+  await summary.updateSummary('Started here');
+  check('a page switch during the id lookup leaves the other page alone',
+    farSticky.text.characters, 'Their summary');
+  check('and writes the sticky on the page the click came from',
+    [here.text.characters, sumEnv.stickies.length], ['Started here', 0]);
+  check('and leaves the other page remembering nothing',
+    [sumEnv.pageData.duckSummaryNodeId, otherData.duckSummaryNodeId], [here.id, undefined]);
+
   const throughCode = bootPlugin({ duckClientId: 'client-01' }, { fileKey: 'F', cx: 0, cy: 0 });
   await settled();
   throughCode.send({ type: 'update-summary', text: 'From the UI' });

@@ -13,10 +13,15 @@ function setMode(mode: Mode) {
   post({ type: 'mode', mode: mode });
 }
 
-export function header(sub: string) {
+// The round number recedes, what the round wants from you does not. The
+// plugin's own name is not news to someone already looking at the panel, and
+// at 280px it was spending the width that the demand now uses.
+export function header(sub: string, title?: string) {
+  const lead = typeof title === 'string' ? title : 'Round ' + state.round.id;
   return (
-    '<header class="hdr">' + duckSvg(20) +
-    '<span class="hdr-title">Duck Check-In</span>' +
+    '<header class="hdr">' +
+    '<span class="hdr-title">' + escapeHtml(lead) + '</span>' +
+    (sub ? '<span class="hdr-dot" aria-hidden="true">&middot;</span>' : '') +
     '<span id="hdr-sub" class="hdr-sub">' + escapeHtml(sub) + '</span>' +
     minimizeButton() +
     '</header>'
@@ -127,18 +132,16 @@ export function showSettings() {
   }
 }
 
+// Says what the round wants, not who is in it: the rail below already carries
+// the roster, and the old subtitle spent the header printing a name that the
+// round line printed again two rows down.
 function subtitle(): string {
   if (state.ws === 'reconnecting') return 'reconnecting';
   if (state.ws !== 'live') return 'connecting';
-  if (state.round.status === 'thinking') return 'thinking...';
+  if (state.round.status === 'thinking') return 'thinking';
   if (state.round.status === 'failed') return 'retry';
-  const n = state.participants.length;
-  const pending = pendingOthers();
-  if (iHaveActed() && pending.length) {
-    const extra = pending.length > 1 ? ' +' + (pending.length - 1) : '';
-    return 'waiting on ' + pending[0].displayName + extra;
-  }
-  return n + ' here';
+  if (!iHaveActed()) return 'your turn';
+  return 'waiting';
 }
 
 function pendingOthers(): Participant[] {
@@ -150,27 +153,33 @@ function pendingOthers(): Participant[] {
   return out;
 }
 
+// One segment per person, colour carrying the whole vocabulary: brand for in,
+// border for still out, secondary for passed. A session is capped at six, so
+// the segments never get narrower than a few pixels. This replaces the chips,
+// which spelled every status as a comma-spliced sentence and wrapped to three
+// rows at five people.
 function presenceInner(): string {
   if (!state.participants.length) {
     return '<span class="muted tiny">No one else is here yet.</span>';
   }
-  let chips = '';
+  let segs = '';
   for (let i = 0; i < state.participants.length; i++) {
     const p = state.participants[i];
     const mine = p.clientId === state.clientId;
     const status =
       p.status === 'contributed' ? 'contributed' :
-      p.status === 'passed' ? 'passed' : 'here';
-    const label = p.displayName + (mine ? ' (you)' : '');
-    chips +=
-      '<span class="chip' + (mine ? ' you' : '') + (p.status !== 'pending' ? ' done' : '') +
-      '" role="listitem">' + escapeHtml(label) + ', ' + status + '</span>';
+      p.status === 'passed' ? 'passed' : 'still to answer';
+    const tone = p.status === 'contributed' ? ' in' : p.status === 'passed' ? ' passed' : '';
+    const label = p.displayName + (mine ? ' (you)' : '') + ', ' + status;
+    segs +=
+      '<span class="seg' + tone + (mine ? ' you' : '') + '" role="listitem"' +
+      ' aria-label="' + escapeHtml(label) + '"></span>';
   }
-  return chips;
+  return segs;
 }
 
 function presenceHtml(): string {
-  return '<div id="presence" class="presence" role="list" aria-label="Connected">' +
+  return '<div id="presence" class="rail" role="list" aria-label="Round progress">' +
     presenceInner() + '</div>';
 }
 
@@ -283,17 +292,27 @@ function capLocked(): boolean {
   return !!(state.banner && (state.banner.code === 'session_cap' || state.banner.code === 'rate_limited'));
 }
 
+// Utilities are not the turn. They sit on one small borderless row under
+// whatever the round is actually asking for, instead of stacking full-width
+// beside Send: six identical buttons needed 219px of a 380px panel, which is
+// why the thread had none left.
+function utilityRow(): string {
+  const summaryDisabled = lastFacilitatorText() ? '' : ' disabled';
+  return (
+    '<div class="row util">' +
+    '<button type="button" id="summary" class="ghost small"' + summaryDisabled + '>Update summary</button>' +
+    '<button type="button" id="settings" class="ghost small">Settings</button>' +
+    '</div>'
+  );
+}
+
 function footerInner(kind: Composer): string {
-  const summaryText = lastFacilitatorText();
-  const summaryDisabled = summaryText ? '' : ' disabled';
-  const summary =
-    '<button type="button" id="summary" class="ghost"' + summaryDisabled + '>Update summary</button>';
-  const settings = '<button type="button" id="settings" class="ghost">Settings</button>';
+  const summary = utilityRow();
   const locked = state.busy ? ' disabled' : '';
   const info = state.banner && state.banner.kind === 'info' ? state.banner.text : '';
   const infoHtml = info ? '<p class="muted tiny">' + escapeHtml(info) + '</p>' : '';
   if (kind === 'moods') {
-    return moodButtons() + summary + settings + infoHtml;
+    return '<div class="chips">' + moodButtons() + '</div>' + summary + infoHtml;
   }
   if (kind === 'contribute') {
     return (
@@ -304,23 +323,23 @@ function footerInner(kind: Composer): string {
       '<button type="button" id="send" class="primary"' + locked + '>Send</button>' +
       '<button type="button" id="pass" class="ghost"' + locked + '>Pass</button>' +
       '</div>' +
-      summary + settings + infoHtml
+      summary + infoHtml
     );
   }
   if (kind === 'failed') {
     const retry = capLocked() ? '' : '<button type="button" id="retry" class="primary">Retry</button>';
-    return retry + summary + settings + infoHtml;
+    return retry + summary + infoHtml;
   }
   if (kind === 'waiting' || kind === 'thinking') {
-    return summary + settings + infoHtml;
+    return summary + infoHtml;
   }
   // 'offline' covers both "the socket dropped and we are on it" and "we have
   // stopped trying and only the user can decide what happens next".
   if (state.banner && state.banner.action === 'reconnect') {
     return '<button type="button" id="reconnect" class="primary">Reconnect</button>' +
-      summary + settings + infoHtml;
+      summary + infoHtml;
   }
-  return '<p class="muted tiny">Reconnecting...</p>' + summary + settings + infoHtml;
+  return '<p class="muted tiny">Reconnecting...</p>' + summary + infoHtml;
 }
 
 function footerHtml(kind: Composer): string {
@@ -432,6 +451,7 @@ let paintedComposer: Composer | null = null;
 let paintedInfo = '';
 let paintedThinking = false;
 let paintedBanner = '';
+let paintedBusy = false;
 
 function sessionDomReady(): boolean {
   return !!(
@@ -475,6 +495,7 @@ function rememberPainted(kind: Composer) {
   paintedInfo = state.banner && state.banner.kind === 'info' ? state.banner.text : '';
   paintedThinking = state.round.status === 'thinking';
   paintedBanner = state.banner && state.banner.kind === 'error' ? state.banner.text : '';
+  paintedBusy = state.busy;
 }
 
 function stripTagged(html: string, id: string): string {
@@ -531,10 +552,15 @@ function patchSession(kind: Composer, focus?: boolean): boolean {
   syncThreadExtras(thread);
 
   const info = state.banner && state.banner.kind === 'info' ? state.banner.text : '';
-  if (kind !== paintedComposer || info !== paintedInfo) {
+  // busy is in here because footerInner spells the disabled state into the
+  // markup: without it an action that leaves the composer on the same kind
+  // (every board wait) paints nothing, and a second click in that gap is
+  // dropped by withBoard with no sign it ever landed.
+  if (kind !== paintedComposer || info !== paintedInfo || state.busy !== paintedBusy) {
     composer.innerHTML = footerInner(kind);
     paintedComposer = kind;
     paintedInfo = info;
+    paintedBusy = state.busy;
     wireFooter(kind, !!focus);
   } else if (focus) {
     wireFooter(kind, true);
@@ -587,6 +613,7 @@ export function showSession(opts?: { focus?: boolean }) {
   paintedInfo = '';
   paintedThinking = false;
   paintedBanner = '';
+  paintedBusy = false;
   paintSessionScreen(kind, focus);
   if (!focus) restoreFocus(prevFocus);
 }

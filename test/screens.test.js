@@ -97,6 +97,19 @@ module.exports = async function run() {
   check('entering the session reports session',
     dom.posted.filter((m) => m.type === 'mode').pop(), { type: 'mode', mode: 'session' });
 
+  // The board request between a click and the socket send is a real wait, and
+  // withBoard drops anything clicked inside it. The composer has to say so.
+  const busy = boot();
+  live(busy);
+  el('mood-stuck').onclick();
+  check('a mood click disables the moods while the board is being read',
+    /id="mood-frustrated" data-m="frustrated" disabled/.test(html()), true);
+  busy.deliver({ type: 'board-context', board: ['a sticky'] });
+  await Promise.resolve();
+  await Promise.resolve();
+  check('and the state reaches the room once it comes back',
+    ws.last().sent.filter((m) => m.type === 'set-state').length, 1);
+
   const later = boot();
   live(later, { round: { id: 2, status: 'collecting' } });
   const laterHtml = html();

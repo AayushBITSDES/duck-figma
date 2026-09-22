@@ -27,29 +27,32 @@ async function loadStickyFonts(sticky: StickyNode): Promise<void> {
   await figma.loadFontAsync(name);
 }
 
-function isOnCurrentPage(node: BaseNode): boolean {
+function isOnPage(node: BaseNode, page: PageNode): boolean {
   let current: BaseNode | null = node;
   while (current) {
-    if (current.type === 'PAGE') return current === figma.currentPage;
+    if (current.type === 'PAGE') return current === page;
     current = current.parent;
   }
   return false;
 }
 
 // Reuse a remembered or tagged sticky only when it still lives on this page.
-async function findSummarySticky(): Promise<StickyNode | null> {
-  const storedId = figma.currentPage.getPluginData(PAGE_SUMMARY_ID_KEY);
+// The page is passed in, never read from figma.currentPage: the id lookup
+// below awaits, and a page switch in that gap would send the fallback search
+// off to whatever page is now in view and adopt its summary.
+async function findSummarySticky(page: PageNode): Promise<StickyNode | null> {
+  const storedId = page.getPluginData(PAGE_SUMMARY_ID_KEY);
   if (storedId) {
     const node = await figma.getNodeByIdAsync(storedId);
-    if (node && !node.removed && node.type === 'STICKY' && isOnCurrentPage(node)) {
+    if (node && !node.removed && node.type === 'STICKY' && isOnPage(node, page)) {
       return node;
     }
   }
-  const tagged = figma.currentPage.findAll((n) => {
+  const tagged = page.findAll((n) => {
     return n.type === 'STICKY' && n.getPluginData(SUMMARY_ROLE_KEY) === SUMMARY_ROLE;
   });
   for (const n of tagged) {
-    if (isOnCurrentPage(n)) return n as StickyNode;
+    if (isOnPage(n, page)) return n as StickyNode;
   }
   return null;
 }
@@ -82,15 +85,16 @@ export function updateSummary(raw: string): Promise<void> {
 // chat is what expires.
 async function runUpdate(raw: string) {
   const text = typeof raw === 'string' ? raw : String(raw || '');
-  // Every lookup below reads figma.currentPage, which the user can change
-  // under us during any await. Pin the page we started on so a page switch
-  // mid-write cannot adopt the new page's summary, delete the sticky we just
-  // made on the old one, and stamp this text over someone else's.
+  // Every lookup below would otherwise read figma.currentPage, which the user
+  // can change under us during any await. Pin the page we started on so a
+  // page switch mid-write cannot adopt the new page's summary, delete the
+  // sticky we just made on the old one, and stamp this text over someone
+  // else's.
   const startedOn = figma.currentPage;
   let sticky: StickyNode | null = null;
   let created = false;
   try {
-    sticky = await findSummarySticky();
+    sticky = await findSummarySticky(startedOn);
     if (!sticky) {
       sticky = figma.createSticky();
       created = true;
@@ -111,7 +115,7 @@ async function runUpdate(raw: string) {
       // the sticky we already made.
       let arrived: StickyNode | null = null;
       try {
-        arrived = figma.currentPage === startedOn ? await findSummarySticky() : null;
+        arrived = await findSummarySticky(startedOn);
       } catch {
         arrived = null;
       }
@@ -134,7 +138,7 @@ async function runUpdate(raw: string) {
     sticky.x = Math.round(figma.viewport.center.x - sticky.width / 2);
     sticky.y = Math.round(figma.viewport.center.y - sticky.height / 2);
   }
-  figma.currentPage.selection = [sticky];
+  startedOn.selection = [sticky];
   figma.notify(created ? 'Dropped the session summary on your board.' : 'Updated the session summary.');
   postUpdated(sticky.id);
 }
